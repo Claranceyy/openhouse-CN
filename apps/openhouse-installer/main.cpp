@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <thread>
+#include <iterator>
 #include <vector>
 
 #include "common/crash_log.hpp"
@@ -115,7 +116,25 @@ int Run(const std::string& mode) {
 // installer; --install (that installer) and --repair (the overlay's Fix, from the package kept at
 // install): install right away; --uninstall (its Uninstall openhouse): uninstall right away;
 // --dongles (the overlay's firmware warning): the dongle update, closing SteamVR / Monado for it.
+// --url LINK: an openhouse:// link (SteamVR's firmware Update button on a device): the dongle update.
 int main(int argc, char** argv) {
   lh::crash::Install("openhouse-installer");
-  return Run(argc > 1 ? argv[1] : "");
+  std::string mode = argc > 1 ? argv[1] : "";
+  if (mode == "--url") {
+#ifdef _WIN32
+    // Started by SteamVR: out of its job first, or closing SteamVR for the update closes this too.
+    wchar_t self[MAX_PATH * 2]{};
+    GetModuleFileNameW(nullptr, self, DWORD(std::size(self)));
+    std::wstring command = L"\"" + std::wstring(self) + L"\" --dongles";
+    STARTUPINFOW si{sizeof si};
+    PROCESS_INFORMATION pi{};
+    if (CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, CREATE_BREAKAWAY_FROM_JOB, nullptr, nullptr, &si, &pi)) {
+      CloseHandle(pi.hThread);
+      CloseHandle(pi.hProcess);
+      return 0;
+    }
+#endif
+    mode = "--dongles";   // not in a job (or no breakaway allowed): run here
+  }
+  return Run(mode);
 }

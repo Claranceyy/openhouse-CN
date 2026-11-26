@@ -511,6 +511,8 @@ void InstallDriver(const fs::path& steamvr, const InstallOptions& options, const
     }
     if (fs::exists(p.data / m.filename(), ec)) shortcuts.push_back({"doorman-dongle-manager", "Doorman Dongle Manager", "Doorman Dongle pairing, channels and firmware", p.data / m.filename(), icon("dongle-manager.png"), {}});
   }
+  // SteamVR's firmware Update button on a device opens openhouse://update-dongles: the saved installer.
+  if (!InstallUrlHandler(saved / (std::string("openhouse-installer") + kExe))) log("SteamVR's Update button won't open the updater");
   if (const std::string failed = InstallShortcuts(shortcuts); !failed.empty()) log("Menu entries not added: " + failed);
   else if (!shortcuts.empty()) log("Added the apps to the menu");
 #ifndef _WIN32
@@ -559,6 +561,7 @@ void UninstallDriver(const fs::path& steamvr, const std::function<void(const std
   RemoveMonadoCheck();
 #endif
   Try(log, "Menu entries not removed", [&] { RemoveShortcuts(); });
+  Try(log, "Link handler not removed", [&] { RemoveUrlHandler(); });
   // Only the files the installer put there: the folder also holds the user's recordings.
   for (const char* name : {"update-checker", "update-checker.exe", "update-checker.vrmanifest", "openhouse-installer", "openhouse-installer.exe", "openhouse-overlay",
                            "openhouse-overlay.exe", "openhouse-overlay.vrmanifest", "openhouse-monado-watch", "doorman-dongle-manager",

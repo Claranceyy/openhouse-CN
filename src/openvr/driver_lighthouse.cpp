@@ -333,6 +333,9 @@ struct DeviceStatic {
   bool tundraTracker = false;
 };
 
+// Opens openhouse-installer's Doorman updater: the installer registers the openhouse:// links.
+constexpr const char* kUpdateUrl = "openhouse://update-dongles";
+
 class Device : public ITrackedDeviceServerDriver {
  public:
   explicit Device(DeviceStatic info) : info_(std::move(info)) {
@@ -467,6 +470,14 @@ class Device : public ITrackedDeviceServerDriver {
     if (!active_ || receiver == dongle_) return;
     dongle_ = receiver;
     VRProperties()->SetStringProperty(container_, Prop_ConnectedWirelessDongle_String, receiver.c_str());
+  }
+
+  // SteamVR's "update available" on the device: its Update button opens kUpdateUrl, which the
+  // installer registers to open its Doorman updater (openhouse-installer --dongles).
+  void SetUpdateWarning(bool old) {
+    if (!active_ || old == updateWarning_) return;
+    updateWarning_ = old;
+    VRProperties()->SetBoolProperty(container_, Prop_Firmware_UpdateAvailable_Bool, old);
   }
 
   // Tracked devices: called from the driver thread with the latest liblh data.
@@ -622,8 +633,10 @@ class Device : public ITrackedDeviceServerDriver {
     props->SetBoolProperty(c, Prop_HasCameraComponent_Bool, false);
     props->SetBoolProperty(c, Prop_HasDriverDirectModeComponent_Bool, false);
     props->SetBoolProperty(c, Prop_HasVirtualDisplayComponent_Bool, false);
-    props->SetBoolProperty(c, Prop_Firmware_UpdateAvailable_Bool, false);
-    props->SetBoolProperty(c, Prop_Firmware_ManualUpdate_Bool, false);
+    updateWarning_ = false;
+    props->SetBoolProperty(c, Prop_Firmware_UpdateAvailable_Bool, false);   // SetUpdateWarning, once versions are in
+    props->SetBoolProperty(c, Prop_Firmware_ManualUpdate_Bool, true);
+    props->SetStringProperty(c, Prop_Firmware_ManualUpdateURL_String, kUpdateUrl);
     props->SetBoolProperty(c, Prop_CanUnifyCoordinateSystemWithHmd_Bool, true);
     props->SetBoolProperty(c, Prop_DeviceCanPowerOff_Bool,
                            info_.role == lh::DeviceRole::Controller || info_.role == lh::DeviceRole::Tracker);
@@ -1106,6 +1119,7 @@ class Device : public ITrackedDeviceServerDriver {
   }
   std::atomic<uint32_t> id_{k_unTrackedDeviceIndexInvalid};
   PropertyContainerHandle_t container_ = k_ulInvalidPropertyContainer;
+  bool updateWarning_ = false;
   std::string dongle_;  // SetDongle
   std::mutex poseMutex_;
   DriverPose_t pose_{};
@@ -1579,11 +1593,16 @@ class Provider : public IServerTrackedDeviceProvider {
           if (found != devices_.end()) found->second->UpdateBase(b);
         }
         std::map<std::string, std::string> dongles;  // device -> its receiver
+        std::set<std::string> old;                   // devices whose radio or Doorman Dongle has an update
         for (const auto& r : session_->Receivers())
-          if (!r.connected.empty()) dongles[r.connected] = r.serial;
+          if (!r.connected.empty()) {
+            dongles[r.connected] = r.serial;
+            if (r.firmwareOld || r.radioOld) old.insert(r.connected);
+          }
         for (auto& [serial, d] : devices_) {
           const auto r = dongles.find(serial);
           if (r != dongles.end()) d->SetDongle(r->second);
+          d->SetUpdateWarning(old.count(serial) > 0);
         }
       }
       if (now - lastTuning_ >= 1.0) {  // settings.json edits apply while playing

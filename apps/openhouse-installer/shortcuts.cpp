@@ -1,6 +1,7 @@
 #include "shortcuts.hpp"
 
 #include <cstdlib>
+#include <fstream>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -114,5 +115,73 @@ void RemoveShortcuts() {
   const fs::path folder = Folder();
   if (!folder.empty()) RemoveAll(folder);
 }
+
+#ifdef _WIN32
+namespace {
+bool SetValue(HKEY key, const wchar_t* sub, const wchar_t* name, const std::wstring& value) {
+  HKEY k;
+  if (RegCreateKeyExW(key, sub, 0, nullptr, 0, KEY_WRITE, nullptr, &k, nullptr) != ERROR_SUCCESS) return false;
+  const bool ok = RegSetValueExW(k, name, 0, REG_SZ, reinterpret_cast<const BYTE*>(value.c_str()),
+                                 DWORD((value.size() + 1) * sizeof(wchar_t))) == ERROR_SUCCESS;
+  RegCloseKey(k);
+  return ok;
+}
+}  // namespace
+
+bool InstallUrlHandler(const fs::path& installer) {
+  const wchar_t* root = L"Software\\Classes\\openhouse";
+  return SetValue(HKEY_CURRENT_USER, root, nullptr, L"URL:openhouse") &&
+         SetValue(HKEY_CURRENT_USER, root, L"URL Protocol", L"") &&
+         SetValue(HKEY_CURRENT_USER, L"Software\\Classes\\openhouse\\shell\\open\\command", nullptr,
+                  L"\"" + installer.wstring() + L"\" --url \"%1\"");
+}
+
+void RemoveUrlHandler() { RegDeleteTreeW(HKEY_CURRENT_USER, L"Software\\Classes\\openhouse"); }
+#else
+namespace {
+const char* kUrlEntry = "openhouse-url.desktop";
+// mimeapps.list's [Default Applications] with ours for x-scheme-handler/openhouse (add: true) or without it.
+void SetDefault(bool add) {
+  const char* xdg = std::getenv("XDG_CONFIG_HOME");
+  const fs::path file = (xdg && *xdg ? Path(xdg) : HomeDirectory() / ".config") / "mimeapps.list";
+  std::ifstream in(file);
+  std::string line, out, section;
+  bool done = false;
+  while (std::getline(in, line)) {
+    if (!line.empty() && line[0] == '[') {
+      if (add && section == "[Default Applications]" && !done) { out += std::string("x-scheme-handler/openhouse=") + kUrlEntry + "\n"; done = true; }
+      section = line;
+    } else if (line.rfind("x-scheme-handler/openhouse=", 0) == 0) {
+      continue;
+    }
+    out += line + "\n";
+  }
+  if (add && !done) {
+    if (section != "[Default Applications]") out += "[Default Applications]\n";
+    out += std::string("x-scheme-handler/openhouse=") + kUrlEntry + "\n";
+  }
+  in.close();
+  std::error_code ec;
+  fs::create_directories(file.parent_path(), ec);
+  WriteFileAtomic(file, out);
+}
+}  // namespace
+
+bool InstallUrlHandler(const fs::path& installer) {
+  const std::string d = "[Desktop Entry]\nType=Application\nName=openhouse\nExec=" + Arg(Utf8(installer)) +
+                        " --url %u\nMimeType=x-scheme-handler/openhouse;\nNoDisplay=true\nTerminal=false\n";
+  const fs::path folder = Folder();
+  std::error_code ec;
+  fs::create_directories(folder, ec);
+  if (!WriteFileAtomic(folder / kUrlEntry, d)) return false;
+  SetDefault(true);
+  return true;
+}
+
+void RemoveUrlHandler() {
+  RemoveFile(Folder() / kUrlEntry);
+  SetDefault(false);
+}
+#endif
 
 }  // namespace openhouse::installer

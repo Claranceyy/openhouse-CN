@@ -22,4 +22,10 @@ struct Shortcut {
 std::string InstallShortcuts(const std::vector<Shortcut>& shortcuts);
 void RemoveShortcuts();
 
+// openhouse:// links open `installer --url <link>`: SteamVR's firmware "Update" button on a device
+// opens openhouse://update-dongles (the driver sets it), which starts the Doorman updater.
+// Windows: HKCU\Software\Classes\openhouse; Linux: an x-scheme-handler .desktop entry.
+bool InstallUrlHandler(const fs::path& installer);
+void RemoveUrlHandler();
+
 }  // namespace openhouse::installer
