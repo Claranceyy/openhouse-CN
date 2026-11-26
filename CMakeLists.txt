@@ -149,8 +149,12 @@ if(LH_BUILD_USB)
     src/transport/usb/raw_capture.cpp
     src/transport/usb/wireless_decoder.cpp
     src/transport/usb/usb_transport.cpp
+    src/transport/usb/hid_list.cpp
     src/transport/usb/doorman_dongle.cpp)
   add_library(lh::usb ALIAS lh_usb)
+  if(WIN32)
+    target_link_libraries(lh_usb PRIVATE setupapi cfgmgr32 hid)   # hid_list.cpp: listing without device I/O
+  endif()
   set_target_properties(lh_usb PROPERTIES EXPORT_NAME usb POSITION_INDEPENDENT_CODE ON)
   target_compile_features(lh_usb PUBLIC cxx_std_20)
   target_include_directories(lh_usb PUBLIC
@@ -458,7 +462,7 @@ if(LH_BUILD_TESTS)
   endif()
   if(LH_BUILD_USB)
     target_sources(lh_unit_tests PRIVATE tests/unit/test_report_parser.cpp tests/unit/test_device_config.cpp
-      tests/unit/test_raw_capture.cpp tests/unit/test_radio_mode.cpp)
+      tests/unit/test_raw_capture.cpp tests/unit/test_radio_mode.cpp tests/unit/test_hid_list.cpp)
     target_link_libraries(lh_unit_tests PRIVATE lh_usb)
     get_target_property(LH_USB_TARGET_TYPE lh_usb TYPE)
     if(LH_USB_TARGET_TYPE STREQUAL "STATIC_LIBRARY")
