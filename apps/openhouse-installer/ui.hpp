@@ -200,7 +200,6 @@ class Ui {
   Watcher<std::vector<WiredDevice>> wired_;
   Watcher<std::vector<WirelessDevice>> wireless_;
   std::set<std::string> checked_;
-  std::set<std::string> accepted_;  // unknown devices the user accepted to flash anyway
   std::vector<StockModel> stockModels_;
   std::map<std::string, int> stockChoice_;  // doorman-dongle-manager device -> stockModels_ index
   std::vector<std::pair<std::string, std::string>> results_;  // device, result

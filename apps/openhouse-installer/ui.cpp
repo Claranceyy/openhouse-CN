@@ -8,6 +8,7 @@
 #include <map>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <ctime>
@@ -568,23 +569,28 @@ void ProgressBar(const Job& job) {
   ImGui::ProgressBar(job.Progress(), ImVec2(-1, 0), pct);
 }
 
-// A device openhouse doesn't know: its id, its likely radio, a link to report it, and the
-// user's go-ahead to flash it anyway. True once accepted.
-bool UnknownDevice(uint32_t hwid, RadioFamily family, const std::string& key, std::set<std::string>* accepted) {
+// A device openhouse doesn't know: never flashed (headsets and other devices show up here too), only
+// what's needed to add it (its id, serial, USB id) and a link to report it.
+void UnknownDevice(uint32_t hwid, const std::string& serial, const std::string& usb, const std::string& key) {
   ImGui::Indent();
-  ImGui::TextColored(kWarn, "Unknown device (ID %08X). Device type: %s", hwid,
-                     family == RadioFamily::Tracker10 ? "older hardware (VIVE 1.0, neo)" : "newer hardware (wm3)");
-  ImGui::TextColored(kWarn, "It might not work. Report the ID on GitHub");
+  char line[200];
+  std::snprintf(line, sizeof line, "Unknown device: ID %08X, serial %s%s%s", hwid, serial.c_str(), usb.empty() ? "" : ", USB ", usb.c_str());
+  ImGui::TextColored(kWarn, "%s", line);
+  ImGui::TextColored(kMuted, "Not flashable. Report it so it can be added");
   if (ImGui::SmallButton(("Report on GitHub##" + key).c_str())) {
-    char url[160];
-    std::snprintf(url, sizeof url, "https://github.com/YusufOzmen01/openhouse/issues/new?title=New%%20device%%20ID%%3A%%20%08X", hwid);
+    std::string s;   // URL-safe: letters, digits and '-' as they are, the rest %XX
+    for (unsigned char c : serial) {
+      char e[4];
+      std::snprintf(e, sizeof e, "%%%02X", c);
+      s += std::isalnum(c) || c == '-' ? std::string(1, char(c)) : std::string(e);
+    }
+    char url[512];
+    std::snprintf(url, sizeof url,
+                  "https://github.com/YusufOzmen01/openhouse/issues/new?title=New%%20device%%20ID%%3A%%20%08X&body=ID%%20%08X%%0ASerial%%20%s%%0AUSB%%20%s%%0ADevice%%3A%%20",
+                  hwid, hwid, s.c_str(), usb.empty() ? "-" : usb.c_str());
     OpenInFileManager(Path(url));
   }
-  ImGui::SameLine();
-  bool ok = accepted->count(key) > 0;
-  if (ImGui::Checkbox(("I accept##" + key).c_str(), &ok)) { if (ok) accepted->insert(key); else accepted->erase(key); }
   ImGui::Unindent();
-  return ok;
 }
 
 
@@ -1901,7 +1907,7 @@ void Ui::RadioWiredPage(bool restore) {
     const bool supported = d.model.family != RadioFamily::Unsupported;
     const fs::path image = restore ? StockRadioImage(steamvr_.root, d.model.hwid) : OurRadioImage(d.model.family);
     const bool haveImage = supported && !image.empty();
-    const bool allowed = d.model.known || accepted_.count(d.serial);
+    const bool allowed = d.model.known;   // an unknown device is never flashed
     if (!allowed) checked_.erase(d.serial);
     bool on = checked_.count(d.serial) > 0;
     ImGui::BeginDisabled(!haveImage || !allowed);
@@ -1912,8 +1918,11 @@ void Ui::RadioWiredPage(bool restore) {
     if (radio.color) ImGui::PopStyleColor();
     if (d.model.known && supported) { ImGui::SameLine(); ImGui::TextColored(radio.color ? *radio.color : kMuted, "%s", radio.text.c_str()); }
     ImGui::EndDisabled();
-    if (!d.model.known && haveImage) UnknownDevice(d.model.hwid, d.model.family, d.serial, &accepted_);
-    else if (!d.model.known) { ImGui::SameLine(); ImGui::TextColored(kMuted, "(unknown device %08X, no firmware to restore)", d.model.hwid); }
+    if (!d.model.known) {
+      char usb[16];
+      std::snprintf(usb, sizeof usb, "28DE:%04X", d.pid);
+      UnknownDevice(d.model.hwid, d.serial, usb, d.serial);
+    }
     else if (!supported) { ImGui::SameLine(); ImGui::TextColored(kMuted, "(not supported)"); }
     else if (!haveImage) { ImGui::SameLine(); ImGui::TextColored(kMuted, "(firmware not found)"); }
   }
@@ -2002,8 +2011,7 @@ void Ui::RadioWirelessPage(bool restore) {
   for (const auto& d : devices) {
     const bool supported = d.model.family != RadioFamily::Unsupported && !OurRadioImage(d.model.family).empty();
     const bool needsPick = restore && d.route == Route::Doorman && stockFor(d).empty();
-    const bool unknownOk = !d.model.known && !restore && supported;
-    const bool allowed = d.model.known || (unknownOk && accepted_.count(d.Key()));
+    const bool allowed = d.model.known;   // an unknown device is never flashed
     if (!allowed) checked_.erase(d.Key());
     bool on = checked_.count(d.Key()) > 0;
     ImGui::BeginDisabled(!supported || !allowed);
@@ -2014,8 +2022,7 @@ void Ui::RadioWirelessPage(bool restore) {
     if (radio.color) ImGui::PopStyleColor();
     if (d.model.known && supported) { ImGui::SameLine(); ImGui::TextColored(radio.color ? *radio.color : kMuted, "%s", radio.text.c_str()); }
     ImGui::EndDisabled();
-    if (unknownOk) UnknownDevice(d.model.hwid, d.model.family, d.Key(), &accepted_);
-    else if (!d.model.known) { ImGui::SameLine(); ImGui::TextColored(kMuted, "(unknown device %08X)", d.model.hwid); }
+    if (!d.model.known) UnknownDevice(d.model.hwid, d.serial, "", d.Key());   // over the air: no USB id of its own
     else if (!supported) { ImGui::SameLine(); ImGui::TextColored(kMuted, "(not supported)"); }
     if (restore && supported && d.model.known && d.route == Route::Doorman && IsDoormanRadio(d.model.hwid)) {
       ImGui::SameLine();
@@ -2254,6 +2261,8 @@ void Ui::DongleUpdatePage() {
         else if (s->storedRadio) std::snprintf(text, sizeof text, "Off, up to date");
         else std::snprintf(text, sizeof text, "Off: turn it on");
         row(label, StoredRadioNeedsUpdate(*s) && !started ? kWarn : grey, name, StoredRadioNeedsUpdate(*s) && !started ? kWarn : grey, text);
+      } else if (!OurRadioVersion(s->device.model.family) && IsDoormanRadio(s->device.radioVersion)) {
+        row(label, kBad, name, kBad, "Its firmware isn't in this installer's firmwares folder");
       } else if (needs) {
         char text[64];
         std::snprintf(text, sizeof text, "Needs an update (radio %08X)", s->device.radioVersion);
@@ -2265,10 +2274,15 @@ void Ui::DongleUpdatePage() {
     {
       const auto r = results.find(-1);
       char fw[64];
-      std::snprintf(fw, sizeof fw, "Firmware %04X, updates to %04X", updateDongle_.firmware, PackagedDongleVersion());
-      const bool current = updateDongle_.firmware == PackagedDongleVersion();
-      const ImVec4 c = r == results.end() ? (current ? kGood : kWarn) : r->second.state == 2 ? kGood : r->second.state == 3 ? kBad : kWarn;
-      row("Dongle", c, "Doorman Dongle", c, r != results.end() ? r->second.text : current ? std::string("Up to date") : std::string(fw));
+      const uint16_t packagedFw = PackagedDongleVersion();
+      std::snprintf(fw, sizeof fw, "Firmware %04X, updates to %04X", updateDongle_.firmware, packagedFw);
+      const bool current = updateDongle_.firmware == packagedFw;
+      const ImVec4 c = r == results.end() ? (!packagedFw ? kBad : current ? kGood : kWarn) : r->second.state == 2 ? kGood : r->second.state == 3 ? kBad : kWarn;
+      // No version file: this installer was started without its package's firmwares folder.
+      const std::string text = r != results.end() ? r->second.text
+                               : !packagedFw ? "Firmware " + std::string(fw + 9, 4) + ", no update found in this installer's firmwares folder"
+                               : current ? std::string("Up to date") : std::string(fw);
+      row("Dongle", c, "Doorman Dongle", c, text);
     }
     ImGui::EndTable();
   }
