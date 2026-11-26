@@ -38,16 +38,28 @@ Source of truth: `doorman/common/doorman_link.h` (air format, constants) and
     hopping on the old one, so while a slot misses polls the dongle polls it where that rule puts it,
     from what it sent in the device's last two answered POLLs (in turn with the cycle's own channel,
     within 1 s). Without it, such a device was lost for up to ~1 s, or rejoined. Cmd 0x32.
-  * Home (cmd 0x36, RAM only, default all 16): the channels a dongle may hop on, at least 8.
+  * Home (cmd 0x36, RAM only, default all 16): the channels a dongle may hop on, at least 8; bit k
+    is hop channel k, 2404 + 5k MHz (0x00FF = 2404-2439 MHz, 0xFF00 = 2444-2479 MHz).
     Every dongle steps through its channels in the same order, so two dongles side by side whose
     cycles drift slowly against each other sit on the same channel for many cycles in a row and
-    lose polls in runs. On disjoint homes (0x00FF / 0xFF00) they never hop on the same channel
-    (the join channel, 2480 MHz, stays shared). Devices follow it through the mask (any radio).
-    Adaptive hopping works inside the home: a new home starts with all its channels on and a fresh
-    2 s round; it keeps 4 on, and goes down to 3 for a channel losing at least twice the typical
-    loss (the lower median there), so in practice to 3 unless every channel is lossy. Back to all
-    16: at least 8 on at once; strikes and time-outs carry over. A dongle never leaves its home,
-    so pick homes from channels that are clean where the dongles are.
+    lose polls in runs. On disjoint homes (0x00FF / 0xFF00) they don't hop on the same channel.
+    Two exceptions: the join channel (2480 MHz) stays shared, and for up to 1 s after a home
+    change ghost-follow may still poll a device that missed the change on a channel of its old
+    mask. Devices follow a home through the mask (any radio).
+    Adaptive hopping inside a home (any home but 0xFFFF, a 15-channel one too): a new home starts
+    with all its channels on and a fresh 2 s round. A channel is bad when it loses more than the
+    typical channel (the lower median of the home's channels in use) + 8 points. Bad channels go
+    worst first down to 4 on; below that (to 3) only one losing at least twice the typical loss.
+    Two limits:
+    - With more than half of the channels in use lossy, the typical channel is a lossy one itself:
+      then no channel is far enough above it, or the typical loss is 20 % or more (the "loss
+      everywhere" rule, as on all 16), and nothing is dropped. Example: Wi-Fi on channels 1 and 6
+      covers 7 of 0x00FF's 8 channels, and that dongle keeps hopping on all 8. On all 16 it would
+      still have the upper channels to hop on.
+    - One 2 s round takes 8 channels down to 4 at most; 3 needs another round.
+    Back to all 16: at least 8 on at once; strikes and time-outs carry over. A dongle never leaves
+    its home, so pick homes from channels that are clean where the dongles are (`dongle.py scan`,
+    then `dongle.py channels` for the loss per channel once it runs).
 * Reliability:
   * Uplink: go-back-N, window 2, 3-bit seq; the POLL carries the ack.
   * Downlink: alternating bit (dseq/dack).

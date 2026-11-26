@@ -221,8 +221,11 @@ def main():
     elif c == "forget": cmd(open_dev(), 0x26, bytes([0xFF if len(a) < 2 or a[1] == "all" else int(a[1])])); slots()
     elif c == "channels": channels()
     elif c == "home":
-        st, d = cmd(open_dev(), 0x36, struct.pack("<H", int(a[1], 0) if len(a) > 1 else 0))
+        h = open_dev(); want = int(a[1], 0) if len(a) > 1 else 0
+        st, d = cmd(h, 0x36, struct.pack("<H", want))
         if st: sys.exit("refused: a home needs at least 8 channels" if st == 2 else "this dongle firmware has no home channels (cmd 0x36)")
+        if want:                                  # taken at the next cycle start: the reply still has the old mask
+            time.sleep(0.05); st, d = cmd(h, 0x36, struct.pack("<H", 0))
         home, mask = struct.unpack_from("<2H", d)
         print(f"home 0x{home:04X}, mask in use 0x{mask:04X}, keeps {d[4]} on (down to {d[5]} for a clearly bad one)")
     elif c == "codec":
