@@ -667,6 +667,43 @@ static void channels_eval(void)
   for (int k = 0; k < DML_NHOP; k++) { chs[k].polls = 0; chs[k].lost = 0; }
   next_mask = m;
 }
+/* The hopping at each cycle start: the mask announced in the last cycle is used from now on, the 2 s round
+   is judged (next_mask, announced in this cycle), and a new home is taken. On its own so a host test can
+   drive it (doorman/test/hop_test.c). */
+static void hop_cycle_start(void)
+{
+  cycle++;
+  mask = next_mask;
+  cur_ch = dml_channel(cycle, mask);
+  channels_eval();                                          /* sets next_mask (announced in this cycle) */
+  if (home_set && home == 0xFFFF) {    /* back to all 16: the channels that aren't timed out, at least CH_MIN_ON */
+    home_set = 0;
+    uint16_t m = home;
+    int on = DML_NHOP;
+    /* Time-outs are at most 300 s: one further ahead is an old value read the wrong way round, and over.
+       Outside the home nothing updates them, so after 24.8 days (ms_ticks on by 2^31) a signed compare
+       would keep those channels off, even ones never struck (0) on a dongle up that long. */
+    for (int c = 0; c < DML_NHOP; c++) if (chs[c].off_until_ms - ms_ticks - 1u < 300000u) { m &= (uint16_t)~(1u << c); on--; }
+    while (on < CH_MIN_ON) {                                /* the ones due back soonest */
+      int c1 = -1;
+      for (int c = 0; c < DML_NHOP; c++)
+        if (!((m >> c) & 1) && (c1 < 0 || (int32_t)(chs[c].off_until_ms - chs[c1].off_until_ms) < 0)) c1 = c;
+      m |= (uint16_t)(1u << c1); chs[c1].off_until_ms = ms_ticks; on++;
+    }
+    next_mask = m;
+  } else if (home_set) {
+    /* A new home is judged on its own: all its channels on and a fresh 2 s round. Time-outs from the whole
+       band would otherwise leave it on whatever survived them (3 of 8 seen) until they end; strikes stay, so
+       a channel dropped again stays off longer. */
+    home_set = 0;
+    for (int c = 0; c < DML_NHOP; c++) {
+      if ((home >> c) & 1) chs[c].off_until_ms = ms_ticks;
+      chs[c].polls = 0; chs[c].lost = 0;
+    }
+    ch_eval_ms = ms_ticks;
+    next_mask = home;
+  }
+}
 
 /* ---------------- main-loop entry points ---------------- */
 void link_init(void)
@@ -736,34 +773,7 @@ void link_poll(void)
   if ((int32_t)(us_now() - t_c) > (int32_t)period_us || (int32_t)(t_c - us_now()) > (int32_t)period_us)
     t_c = us_now();                                         /* fell behind / first run: restart the plan */
   wait_until(t_c);
-  cycle++;
-  mask = next_mask;
-  cur_ch = dml_channel(cycle, mask);
-  channels_eval();                                          /* sets next_mask (announced in this cycle) */
-  if (home_set && home == 0xFFFF) {    /* back to all 16: the channels that aren't timed out, at least CH_MIN_ON */
-    home_set = 0;
-    uint16_t m = home;
-    int on = DML_NHOP;
-    for (int c = 0; c < DML_NHOP; c++) if ((int32_t)(ms_ticks - chs[c].off_until_ms) < 0) { m &= (uint16_t)~(1u << c); on--; }
-    while (on < CH_MIN_ON) {                                /* the ones due back soonest */
-      int c1 = -1;
-      for (int c = 0; c < DML_NHOP; c++)
-        if (!((m >> c) & 1) && (c1 < 0 || (int32_t)(chs[c].off_until_ms - chs[c1].off_until_ms) < 0)) c1 = c;
-      m |= (uint16_t)(1u << c1); chs[c1].off_until_ms = ms_ticks; on++;
-    }
-    next_mask = m;
-  } else if (home_set) {
-    /* A new home is judged on its own: all its channels on and a fresh 2 s round. Time-outs from the whole
-       band would otherwise leave it on whatever survived them (3 of 8 seen) until they end; strikes stay, so
-       a channel dropped again stays off longer. */
-    home_set = 0;
-    for (int c = 0; c < DML_NHOP; c++) {
-      if ((home >> c) & 1) chs[c].off_until_ms = ms_ticks;
-      chs[c].polls = 0; chs[c].lost = 0;
-    }
-    ch_eval_ms = ms_ticks;
-    next_mask = home;
-  }
+  hop_cycle_start();
   int k = 0;
   uint32_t missed = 0;
   for (uint8_t i = 0; i < DML_SLOTS; i++) {
@@ -879,7 +889,7 @@ int link_stream_pop(uint8_t *rep, int itf)
 
 static void put32(uint8_t *p, uint32_t v) { memcpy(p, &v, 4); }
 
-int link_cmd(const uint8_t *in, uint8_t *d, uint8_t *st)    /* 0x20..0x2F, 0x32..0x36; d = 61 bytes */
+int link_cmd(const uint8_t *in, uint8_t *d, uint8_t *st)    /* 0x20..0x2F, 0x32..0x3B; d = 61 bytes */
 {
   uint8_t i = in[2] < DML_SLOTS ? in[2] : 0;
   slot_t *s = &sl[i];
