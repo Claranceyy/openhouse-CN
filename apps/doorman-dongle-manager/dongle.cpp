@@ -629,8 +629,12 @@ DongleManager::DongleManager() {
 }
 DongleManager::~DongleManager() {
   stop_ = true;
-  if (scanner_.joinable()) scanner_.join();
+  // Every dongle told to stop first, then dropped on threads of their own: one after another, each
+  // waited for its thread to finish the request it was in (over the air, up to seconds).
+  for (auto& d : dongles_) d->RequestStop();
+  for (auto& d : dongles_) DropLater(std::move(d));
   dongles_.clear();
+  if (scanner_.joinable()) scanner_.join();
   // Dongles still closing on their own threads: hidapi must outlive them (bounded: we're exiting).
   for (int i = 0; i < 30 && g_dropping > 0; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
   if (g_dropping == 0) hid_exit();

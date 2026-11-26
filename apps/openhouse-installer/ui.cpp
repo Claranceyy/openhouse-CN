@@ -2067,6 +2067,7 @@ void Ui::RadioWirelessPage(bool restore) {
 
 void Ui::DongleUpdatePick() {
   Title("Update Dongles");
+  if (autoInstall_) RuntimesClosed();   // --dongles: VR closes from the start (the user agreed in the overlay)
   if (!homeWatching_) {
     homeDongles_.Start(FindDongleUpdates, 5.0);
     homeWatching_ = true;
@@ -2113,6 +2114,14 @@ void Ui::StartDongleUpdate(const std::vector<DongleSlot>& slots) {
       if (RadioNeedsUpdate(s)) todo.push_back(&s);
     int step = 0;
     const int steps = int(todo.size()) + 1;
+    // The versions just installed, told to the dongle again once it's done: a dongle before 0x002D
+    // couldn't take them during the radio updates, and keeps the old ones over its own update.
+    std::vector<std::pair<int, uint32_t>> updated;
+    auto remember = [&] {
+      for (const auto& d : FindDoormanDongles())
+        if (d.serial == dongle.serial)
+          for (const auto& [slot, version] : updated) SetRememberedRadio(d.path, slot, version);
+    };
     for (const DongleSlot* s : todo) {
       RadioImage image;
       std::string error;
@@ -2132,12 +2141,12 @@ void Ui::StartDongleUpdate(const std::vector<DongleSlot>& slots) {
           std::this_thread::sleep_for(std::chrono::seconds(3));   // let it reconnect
         }
       }
-      if (ok) set(s->slot, 2, "Updated, turned off");
+      if (ok) { set(s->slot, 2, "Updated, turned off"); updated.emplace_back(s->slot, image.version); }
       else set(s->slot, 3, "Failed. Connect it with a cable and flash it from Install or Update Firmware");
       ++step;
     }
     // Then the dongle.
-    if (packaged && dongle.firmware == packaged) { set(-1, 2, "Up to date"); return true; }
+    if (packaged && dongle.firmware == packaged) { set(-1, 2, "Up to date"); remember(); return true; }
     if (!dongle.Banked()) {
       set(-1, 3, "Its firmware is too old to update here: use Install or Update Firmware > Doorman");
       j.Fail("the dongle wasn't updated");
@@ -2153,7 +2162,7 @@ void Ui::StartDongleUpdate(const std::vector<DongleSlot>& slots) {
       DoormanDongleInfo now = dongle;
       for (const auto& d : FindDoormanDongles())
         if (d.serial == dongle.serial) now = d;
-      if (now.firmware == packaged) { set(-1, 2, "Updated"); return true; }
+      if (now.firmware == packaged) { set(-1, 2, "Updated"); remember(); return true; }
       std::string error;
       const fs::path f = FirmwareFolder() / "dongle" / "bank" / lh::dongle_bank::ImageName(now.board, now.softDeviceBuild, now.bank);
       std::ifstream fin(f, std::ios::binary);
@@ -2162,7 +2171,7 @@ void Ui::StartDongleUpdate(const std::vector<DongleSlot>& slots) {
         for (int i = 0; i < 100; ++i) {   // it restarts into the new bank
           std::this_thread::sleep_for(std::chrono::milliseconds(200));
           for (const auto& d : FindDoormanDongles())
-            if (d.serial == dongle.serial && d.firmware == packaged) { set(-1, 2, "Updated"); j.Status(1, "Done"); return true; }
+            if (d.serial == dongle.serial && d.firmware == packaged) { set(-1, 2, "Updated"); j.Status(1, "Done"); remember(); return true; }
         }
         error = "it didn't come back with the new firmware";
       }

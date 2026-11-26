@@ -95,10 +95,13 @@ int Run(const std::string& mode) {
       glfwSwapBuffers(window);
     }
   }
-  // Scans finish on their own threads: let the last one end before the process does (bounded).
+  // Gone from the screen at once: what's left below can take a moment (on Windows a USB call can).
+  glfwHideWindow(window);
+  // Scans finish on their own threads: let the last one end before the process does (bounded: a scan
+  // checks g_closing between requests, so it stops within one).
   openhouse::installer::g_closing = true;
   std::unique_lock devices(openhouse::installer::g_deviceMutex, std::defer_lock);
-  for (int i = 0; i < 100 && !devices.try_lock(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  for (int i = 0; i < 30 && !devices.try_lock(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
   ImGui_ImplOpenGL2_Shutdown();
   ImGui_ImplGlfw_Shutdown();
   ImGui::DestroyContext();

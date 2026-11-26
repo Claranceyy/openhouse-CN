@@ -302,6 +302,10 @@ bool FlashDoorman(const WirelessDevice& device, const RadioImage& image, const P
   progress(1, "Checking it on the device");
   r = AirRequest(d, slot, '[', Signature(image.data));
   if (r.empty() || r[2]) { *error = "the device's check of the firmware failed; its current radio firmware stays"; return false; }
+  // It's turned off now and can't say its new version: the dongle is told (firmware 0x002D+).
+  uint8_t set[5] = {uint8_t(slot)};
+  std::memcpy(set + 1, &image.version, 4);
+  d.Command(0x39, set, sizeof set);
   progress(1, "Turning the device off");
   const uint8_t off[] = {'P', 0x9f, 4, 'o', 'f', 'f', '!'};
   d.Send(slot, off, sizeof off);
@@ -685,6 +689,14 @@ std::vector<DongleSlot> ScanDongleSlots(const DoormanDongleInfo& dongle) {
     w.serial = id;
   }
   return out;
+}
+
+bool SetRememberedRadio(const std::string& donglePath, int slot, uint32_t version) {
+  DoormanDongle d(donglePath);
+  if (!d.Ok()) return false;
+  uint8_t set[5] = {uint8_t(slot)};
+  std::memcpy(set + 1, &version, 4);
+  return d.Command(0x39, set, sizeof set);
 }
 
 void PowerOffDevice(const WirelessDevice& device) {

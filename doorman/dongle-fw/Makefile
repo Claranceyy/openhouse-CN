@@ -27,7 +27,7 @@ all: $(foreach v,$(VARIANTS),build/doorman_dongle_$(v).hex build/doorman_dongle_
   build/doorman_dongle_sd.uf2 build/doorman_dongle_nosd.uf2
 
 define variant
-build/doorman_dongle_$(1)_%.elf: $(SRCS) $(NRFX)/mdk/gcc_startup_nrf52840.S src/*.h ../common/*.h ld/bank_$(call layout,$(1))_%.ld
+build/doorman_dongle_$(1)_%.elf: $(SRCS) $(NRFX)/mdk/gcc_startup_nrf52840.S src/*.h ../common/*.h ../third_party/nrfx/mdk/nrf_common.ld ld/bank_$(call layout,$(1))_%.ld
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(call board_flags,$(1)) $(SRCS) $(NRFX)/mdk/gcc_startup_nrf52840.S \
 	  $(LDFLAGS) -Tld/bank_$(call layout,$(1))_$$*.ld -Wl,-Map=build/doorman_dongle_$(1)_$$*.map -o $$@

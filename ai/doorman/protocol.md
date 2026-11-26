@@ -191,6 +191,7 @@ and `doorman_link.py`. Older two-interface firmware isn't supported.
 | 0x34 | set a slot's name `[slot][len][UTF-8, up to 59 B]`, len 0 clears (status 2: not paired or too long). Kept in flash with the pairings; forgetting or re-pairing the slot clears it |
 | 0x35 | a slot's name `[slot]` -> `[len][UTF-8]` |
 | 0x38 | radio versions (fw 0x002C+) -> `[n][u32 LE per slot]`: each paired device's radio as it last answered `0xF0 'X'`, kept in flash (0 unknown) |
+| 0x39 | set a slot's remembered radio version (fw 0x002D+) `[slot][u32 LE]` -> `[slot]`: the installer, after updating a device it then turns off. A committed radio update (`0xF0 '['` status 0 on its way up) clears it to unknown |
 | 0x29 | live `[first]` (6 slots per reply, as 0x25): per slot `[used\|active<<1][rssi last rx][rssi last tx][min][max][channel][ms since reply u32]`. Min/max reset on read |
 | 0x2A | identity: the slot's last `H` frame (16 B, zeros if none) |
 

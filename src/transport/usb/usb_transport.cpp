@@ -94,6 +94,7 @@ void ReportDecoder::AddEndpoint(const EndpointInfo& e) {
     dev = std::make_shared<DeviceState>();
     dev->id = e.serial;
   }
+  if (e.vid == 0x6767) dev->clock.SetMinimumWindow(true);   // a Doorman Dongle's slot
   if (e.gyroRange >= 0) dev->gyroRange = e.gyroRange;
   if (e.accelRange >= 0) dev->accelRange = e.accelRange;
   Ep ep;

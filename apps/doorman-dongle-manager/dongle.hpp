@@ -147,6 +147,11 @@ class Dongle {
   std::thread thread_;
   std::atomic<bool> stop_{false}, alive_{true};
 
+ public:
+  void RequestStop() { stop_ = true; }   // its thread ends after the request it's in
+
+ private:
+
   mutable std::mutex mutex_;  // state_, actions_, known_
   DongleState state_;
   std::deque<std::function<void()>> actions_;
