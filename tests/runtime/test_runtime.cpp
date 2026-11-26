@@ -547,6 +547,49 @@ TEST(RoomMap, LevelAndSolverCorrectionsAreNeverSteps) {
   EXPECT_NEAR((room.Base(2)->worldFromBase.translation() - placed.translation()).norm(), 0.03, 1e-3);  // the solve, weighed against what the room knew
 }
 
+// What SteamVR's frame is levelled to (RawAlignment): a fresh origin's base accelerometer isn't
+// settled; a level is once no new one has come for 60 s and it has glided in; a stored room's
+// origin (small variance, no level this session) is settled at once.
+TEST(RoomMap, LevelSettlesOnceItStopsChanging) {
+  RoomMap room;
+  room.OnBaseSeen(Config(1), {});
+  ASSERT_TRUE(room.EstablishOrigin(1, {0.0, 0.0}, 1.5e-4));  // its accelerometer only
+  double t = 100;
+  room.Advance(t);
+  EXPECT_FALSE(room.LevelSettled());
+  for (; t < 103; t += 0.01) { room.Advance(t); room.RefineOriginTilt(1, {0.03, 0}, 1e-6, t); }
+  EXPECT_FALSE(room.LevelSettled()) << "levelled, but only just";
+  for (; t < 160; t += 0.01) room.Advance(t);
+  EXPECT_FALSE(room.LevelSettled()) << "57 s after the level";
+  for (; t < 164; t += 0.01) room.Advance(t);
+  EXPECT_TRUE(room.LevelSettled());
+  // a better estimate starts the wait again
+  room.RefineOriginTilt(1, {0.04, 0}, 1e-7, t);
+  EXPECT_FALSE(room.LevelSettled());
+
+  RoomMap stored;
+  stored.OnBaseSeen(Config(1), {});
+  ASSERT_TRUE(stored.EstablishOrigin(1, {0.0, 0.0}, 3e-7));   // as a saved room's origin
+  EXPECT_TRUE(stored.LevelSettled());
+
+  // A room from SteamVR's database: its heading, origin and floor, but its level is the stock
+  // driver's, so the devices level it before it is settled, as a new room.
+  RoomMap imported;
+  ASSERT_TRUE(imported.ImportSteamDatabase(R"({"known_universes": [{"id": "77", "tilt": {"pitch": 0.035, "roll": 0.0},
+      "base_stations": [{"base_serial_number": 1, "target_pose": {"pose": [0, 0, 0, 1, 0, 0, 0], "variance": 0}}]}]})"));
+  imported.OnBaseSeen(Config(1), {});
+  ASSERT_NE(imported.Active(), nullptr);
+  ASSERT_EQ(imported.Active()->id, "steamvr-77");
+  EXPECT_DOUBLE_EQ(imported.Base(1)->rotationVariance, RoomMap::kImportedLevelVariance);
+  t = 100;
+  imported.Advance(t);
+  EXPECT_FALSE(imported.LevelSettled());
+  for (; t < 103; t += 0.01) { imported.Advance(t); imported.RefineOriginTilt(1, {0.0, 0}, 1e-6, t); }
+  EXPECT_GT(Eigen::AngleAxisd(imported.Base(1)->worldFromBase.rotation()).angle(), 0.0) << "levelled by the devices";
+  for (; t < 164; t += 0.01) imported.Advance(t);
+  EXPECT_TRUE(imported.LevelSettled());
+}
+
 TEST(RoomMap, LearnsRefinesAndRelearnsBases) {
   RoomMap room;
   room.OnBaseSeen(Config(1), {});
