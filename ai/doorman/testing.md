@@ -25,6 +25,11 @@ absolute byte counts are a model; comparisons between formats use the same frame
   1.25 and 2.0 (Unicorn counts instructions, not cycles). Between two yields nothing may run past the
   answer window, ~180 us. Needs `arm-none-eabi-gcc` and `pip install unicorn`.
 * `cycle_sim`: a model of the polling cycle under load, fixed answer sizes against `sizing.h`.
+* `hop_test` (`make -C doorman/test check`, run by CI, not by `make` or run.sh): the dongle's own `link.c`, built on the host
+  against `stub/nrf.h`, its hop step at each cycle start driven with made-up per-channel loss. On all
+  16 (no home, or 0x36 0xFFFF) the mask must equal master's adaptive hopping rule (a copy in the test)
+  round for round; with a home every mask and channel stays inside it, never under 3 on; plus fixed
+  cases for the floors, a home mostly hit by Wi-Fi, refused homes and the way back to all 16.
 * `run.sh CAPTURE [LHTOOL] [PYTHON]` does all of it on one capture.
 
 ## Synthetic LH2 load on real devices (no LH2 hardware)
