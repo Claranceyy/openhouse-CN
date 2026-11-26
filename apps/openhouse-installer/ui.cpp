@@ -1218,9 +1218,14 @@ void Ui::InstallPage(bool install) {
 #ifndef _WIN32
     if (FlatpakSteam(steamvr_.root)) ImGui::TextColored(kWarn, "Flatpak Steam isn't fully tested and may cause problems");
     ImGui::Spacing();
-    ImGui::Checkbox("Update check for Monado / WiVRn", &monadoCheck_);
+    // One or the other (or neither): ticking one unticks the other.
+    bool envision = monadoCheck_ == MonadoCheck::Envision, systemd = monadoCheck_ == MonadoCheck::Systemd;
+    if (ImGui::Checkbox("Update check with Envision", &envision)) monadoCheck_ = envision ? MonadoCheck::Envision : MonadoCheck::None;
     ImGui::SameLine();
-    ImGui::TextColored(kMuted, "Needs systemd");
+    ImGui::TextColored(kMuted, "Envision plugin");
+    if (ImGui::Checkbox("Update check with systemd", &systemd)) monadoCheck_ = systemd ? MonadoCheck::Systemd : MonadoCheck::None;
+    ImGui::SameLine();
+    ImGui::TextColored(kMuted, "Monado / WiVRn");
 #endif
   } else {
     if (Replaced()) ImGui::TextUnformatted("SteamVR replaced the openhouse driver. Cleans up what's left of openhouse");

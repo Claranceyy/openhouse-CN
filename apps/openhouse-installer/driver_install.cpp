@@ -4,6 +4,7 @@
 #include <nlohmann/json.hpp>
 
 #include <cstdlib>
+#include <fstream>
 #include <stdexcept>
 #include <vector>
 
@@ -166,6 +167,37 @@ void RemoveOldSettingsPage(const Paths& p) {
 fs::path MonadoUnit() {
   const char* xdg = std::getenv("XDG_CONFIG_HOME");
   return (xdg && *xdg ? Path(xdg) : HomeDirectory() / ".config") / "systemd" / "user" / "openhouse-update-checker.service";
+}
+
+fs::path EnvisionConfig() {
+  const char* xdg = std::getenv("XDG_CONFIG_HOME");
+  return (xdg && *xdg ? Path(xdg) : HomeDirectory() / ".config") / "envision" / "envision.json";
+}
+
+// Envision runs only the plugins ticked in its Preferences: their .desktop paths (canonical, as it
+// compares them) in its config's xr_plugins. Envision writes its whole config back from memory, so
+// it's only edited while Envision isn't running. False when it is, or there's no config to edit.
+bool EnableEnvisionPlugin(const fs::path& desktop, bool on) {
+  const fs::path config = EnvisionConfig();
+  std::error_code ec;
+  if (!fs::exists(config, ec) || RunProcess({"pgrep", "-x", "envision"}, nullptr) == 0) return false;
+  nlohmann::json j;
+  try {
+    std::ifstream in(config);
+    j = nlohmann::json::parse(in);
+  } catch (const std::exception&) {
+    return false;
+  }
+  if (!j.is_object()) return false;
+  const std::string path = Utf8(fs::weakly_canonical(desktop, ec));
+  nlohmann::json plugins = nlohmann::json::array();
+  if (j.contains("xr_plugins") && j["xr_plugins"].is_array())
+    for (const auto& e : j["xr_plugins"])
+      if (!(e.is_string() && e.get<std::string>() == path)) plugins.push_back(e);
+  if (on) plugins.push_back(path);
+  if (j.contains("xr_plugins") && j["xr_plugins"] == plugins) return true;
+  j["xr_plugins"] = plugins;
+  return WriteFileAtomic(config, j.dump(2) + "\n");
 }
 
 // For Monado / WiVRn (they don't start SteamVR apps): a systemd user service that runs the
@@ -386,12 +418,14 @@ bool RemoveDeviceAccess(std::string* error) {
 #endif
 }
 
-bool MonadoCheckInstalled() {
+MonadoCheck InstalledMonadoCheck() {
 #ifdef _WIN32
-  return false;
+  return MonadoCheck::None;
 #else
   std::error_code ec;
-  return fs::exists(MonadoUnit(), ec);
+  if (fs::exists(MonadoUnit(), ec)) return MonadoCheck::Systemd;
+  if (fs::exists(ShortcutFile("update-check"), ec)) return MonadoCheck::Envision;
+  return fs::is_directory(EnvisionConfig().parent_path(), ec) ? MonadoCheck::Envision : MonadoCheck::Systemd;
 #endif
 }
 
@@ -498,8 +532,15 @@ void InstallDriver(const fs::path& steamvr, const InstallOptions& options, const
   if (fs::exists(p.data / overlay.filename(), ec)) {
     Shortcut s{"openhouse", "openhouse", "Devices, base stations, room and settings", p.data / overlay.filename(), icon("openhouse.png"), {}};
 #ifndef _WIN32
-    // Envision runs it as a plugin; the systemd check does the same job when it's on.
-    if (!options.monadoCheck) s.xrPluginArgs = {"--check", Utf8(p.directory)};
+    // Envision: the openhouse window as a plugin to opt into (it opens with each session), and the
+    // update check as its own, hidden from the menu.
+    if (options.monadoCheck == MonadoCheck::Envision) {
+      s.xrPlugin = true;
+      Shortcut check{"update-check", "openhouse update check", "Warns when a SteamVR update replaced the openhouse driver",
+                     p.data / overlay.filename(), s.icon, {"--check", Utf8(p.directory)}};
+      check.hidden = true;
+      shortcuts.push_back(check);
+    }
 #endif
     shortcuts.push_back(s);
   }
@@ -511,16 +552,35 @@ void InstallDriver(const fs::path& steamvr, const InstallOptions& options, const
     }
     if (fs::exists(p.data / m.filename(), ec)) shortcuts.push_back({"doorman-dongle-manager", "Doorman Dongle Manager", "Doorman Dongle pairing, channels and firmware", p.data / m.filename(), icon("dongle-manager.png"), {}});
   }
+#ifndef _WIN32
+  // Before 1.0.5 the update check was the "openhouse" entry's own Envision plugin (--check). That
+  // entry now opens the openhouse window: if Envision had it ticked for the check, it's unticked,
+  // so the window doesn't start opening with every session (the check has its own entry now).
+  {
+    std::ifstream old(ShortcutFile("openhouse"));
+    const std::string text((std::istreambuf_iterator<char>(old)), std::istreambuf_iterator<char>());
+    const auto plugin = text.find("X-XR-Plugin-Exec=");
+    if (plugin != std::string::npos && text.find("--check", plugin) < text.find('\n', plugin))
+      EnableEnvisionPlugin(ShortcutFile("openhouse"), false);
+  }
+#endif
   // SteamVR's firmware Update button on a device opens openhouse://update-dongles: the saved installer.
   if (!InstallUrlHandler(saved / (std::string("openhouse-installer") + kExe))) log("SteamVR's Update button won't open the updater");
   if (const std::string failed = InstallShortcuts(shortcuts); !failed.empty()) log("Menu entries not added: " + failed);
   else if (!shortcuts.empty()) log("Added the apps to the menu");
 #ifndef _WIN32
-  if (options.monadoCheck) {
+  if (options.monadoCheck == MonadoCheck::Systemd) {
     InstallMonadoCheck(p);
     log("Installed the update check for Monado / WiVRn");
   } else {
     RemoveMonadoCheck();
+  }
+  const fs::path checkPlugin = ShortcutFile("update-check");
+  if (options.monadoCheck == MonadoCheck::Envision) {
+    if (EnableEnvisionPlugin(checkPlugin, true)) log("Added the update check to Envision's plugins");
+    else log("Enable \"openhouse update check\" in Envision's Preferences (Envision is open, or not set up yet)");
+  } else {
+    EnableEnvisionPlugin(checkPlugin, false);
   }
 #else
   (void)options;
@@ -559,6 +619,9 @@ void UninstallDriver(const fs::path& steamvr, const std::function<void(const std
   Try(log, "Overlay not unregistered", [&] { SetRegistration(p, p.data / "openhouse-overlay.vrmanifest", kOverlayKey, false, log); });
 #ifndef _WIN32
   RemoveMonadoCheck();
+#endif
+#ifndef _WIN32
+  Try(log, "Envision plugin not removed", [&] { EnableEnvisionPlugin(ShortcutFile("update-check"), false); });
 #endif
   Try(log, "Menu entries not removed", [&] { RemoveShortcuts(); });
   Try(log, "Link handler not removed", [&] { RemoveUrlHandler(); });

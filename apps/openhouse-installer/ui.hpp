@@ -162,7 +162,7 @@ class Ui {
   double runningChecked_ = -1, accessChecked_ = -1;
   bool haveAccess_ = true;
   Job job_, closeJob_;
-  bool monadoCheck_ = true;
+  MonadoCheck monadoCheck_ = InstalledMonadoCheck();   // Linux: Envision plugin, systemd service or neither
   bool autoInstall_ = false, autoStarted_ = false, autoClosed_ = false;
   std::atomic<bool> quit_{false};  // set by the update job
   std::string updateTag_;

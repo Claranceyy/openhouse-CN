@@ -45,7 +45,7 @@ bool Write(const fs::path& folder, const Shortcut& s) {
 }
 #else
 // Every id an install may have made: removed on uninstall, and when an install no longer has it.
-const char* const kIds[] = {"openhouse", "doorman-dongle-manager"};
+const char* const kIds[] = {"openhouse", "doorman-dongle-manager", "update-check"};
 
 fs::path Folder() {
   const char* xdg = std::getenv("XDG_DATA_HOME");
@@ -69,7 +69,8 @@ bool Write(const fs::path& folder, const Shortcut& s) {
   std::string d = "[Desktop Entry]\nType=Application\nName=" + s.name + "\nComment=" + s.comment +
                   "\nExec=" + Arg(Utf8(s.exe)) + "\nPath=" + Utf8(s.exe.parent_path()) +
                   "\nIcon=" + (s.icon.empty() ? std::string("input-gaming") : Utf8(s.icon)) + "\nTerminal=false\nCategories=Utility;\n";
-  if (!s.xrPluginArgs.empty()) {
+  if (s.hidden) d += "NoDisplay=true\n";
+  if (s.xrPlugin || !s.xrPluginArgs.empty()) {
     d += "X-XR-Plugin=true\nX-XR-Plugin-Exec=" + Arg(Utf8(s.exe));
     for (const auto& a : s.xrPluginArgs) d += " " + Arg(a);
     d += "\nX-XR-Plugin-Execution-Time=after-start\n";
@@ -109,6 +110,15 @@ std::string InstallShortcuts(const std::vector<Shortcut>& shortcuts) {
   if (SUCCEEDED(co)) CoUninitialize();
 #endif
   return failed;
+}
+
+fs::path ShortcutFile(const std::string& id) {
+#ifdef _WIN32
+  (void)id;
+  return {};
+#else
+  return File(Folder(), id);
+#endif
 }
 
 void RemoveShortcuts() {
