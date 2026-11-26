@@ -45,7 +45,7 @@ bool Write(const fs::path& folder, const Shortcut& s) {
 }
 #else
 // Every id an install may have made: removed on uninstall, and when an install no longer has it.
-const char* const kIds[] = {"openhouse", "doorman-dongle-manager", "update-check"};
+const char* const kIds[] = {"openhouse", "doorman-dongle-manager", "update-check", "installer"};
 
 fs::path Folder() {
   const char* xdg = std::getenv("XDG_DATA_HOME");

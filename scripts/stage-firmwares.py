@@ -40,7 +40,14 @@ image = repo / 'basestation_firmware/build/firmware.bin'
 data = image.read_bytes()
 if sum(int.from_bytes(data[i:i + 4], 'little') for i in range(0, 32, 4)) % 2**32:
     sys.exit('lhbs: bad vector checksum')
-commit = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', '--short', 'HEAD'], text=True).strip()
+# The commit, from git, or (no checkout: the Nix flake) OPENHOUSE_BUILD_COMMIT.
+import os
+commit = os.environ.get('OPENHOUSE_BUILD_COMMIT', '').removesuffix('-dirty')
+if not commit:
+    try:
+        commit = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', '--short', 'HEAD'], text=True).strip()
+    except (OSError, subprocess.CalledProcessError):
+        commit = 'local'   # no checkout and no commit given (as the CMake version stamp says)
 shutil.copy2(image, out / 'basestation' / f'lhbs-{datetime.date.today():%Y%m%d}-{commit}.bin')
 
 make('doorman/dongle-fw')

@@ -387,6 +387,12 @@ if(LH_BUILD_VIEWER)
                    apps/openhouse-installer/device_type.cpp apps/openhouse-installer/self_update.cpp apps/openhouse-installer/shortcuts.cpp
                    src/common/nordic_dfu.cpp)
     target_include_directories(openhouse-installer PRIVATE include src apps/openhouse-overlay)
+    # The udev rule it installs (Linux), from the one file the Nix package installs too.
+    file(READ "${CMAKE_SOURCE_DIR}/cmake/linux/60-openhouse.rules" LH_UDEV_RULES)
+    file(CONFIGURE OUTPUT "${CMAKE_BINARY_DIR}/generated/lh/udev_rules.h"
+         CONTENT "// Generated from cmake/linux/60-openhouse.rules.\n#pragma once\nconstexpr const char* kUdevRules = R\"udev(@LH_UDEV_RULES@)udev\";\n" @ONLY)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/cmake/linux/60-openhouse.rules")
+    target_include_directories(openhouse-installer PRIVATE "${CMAKE_BINARY_DIR}/generated")
     target_link_libraries(openhouse-installer PRIVATE lh_imgui ${LH_HIDAPI_TARGET} nlohmann_json::nlohmann_json ZLIB::ZLIB)
     if(WIN32)
       target_link_libraries(openhouse-installer PRIVATE shell32 ole32 uuid setupapi cfgmgr32 winhttp)

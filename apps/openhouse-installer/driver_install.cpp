@@ -1,8 +1,11 @@
 #include "driver_install.hpp"
 #include "shortcuts.hpp"
+#include "lh/udev_rules.h"
+#include "lh/version.hpp"
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <cstdlib>
 #include <fstream>
 #include <stdexcept>
@@ -352,19 +355,7 @@ bool PackageHasDriver() {
 #ifndef _WIN32
 namespace {
 constexpr const char* kUdevPath = "/etc/udev/rules.d/60-openhouse.rules";
-constexpr const char* kUdevRules =
-    "# openhouse: lets the logged-in user's openhouse driver, installer and tools open these devices.\n"
-    "# Valve lighthouse devices: Watchman dongles, trackers, controllers, headsets (hidraw, and USB for\n"
-    "# SteamVR's firmware updater).\n"
-    "KERNEL==\"hidraw*\", ATTRS{idVendor}==\"28de\", MODE=\"0660\", TAG+=\"uaccess\"\n"
-    "SUBSYSTEM==\"usb\", ATTRS{idVendor}==\"28de\", MODE=\"0660\", TAG+=\"uaccess\"\n"
-    "# HTC parts of VIVE headsets.\n"
-    "KERNEL==\"hidraw*\", ATTRS{idVendor}==\"0bb4\", MODE=\"0660\", TAG+=\"uaccess\"\n"
-    "# Doorman Dongle.\n"
-    "KERNEL==\"hidraw*\", ATTRS{idVendor}==\"6767\", ATTRS{idProduct}==\"0727\", MODE=\"0660\", TAG+=\"uaccess\"\n"
-    "SUBSYSTEM==\"usb\", ATTRS{idVendor}==\"6767\", ATTRS{idProduct}==\"0727\", MODE=\"0660\", TAG+=\"uaccess\"\n"
-    "# Nordic's USB DFU bootloader (Holyiot, PCA10059): its serial port, kept away from ModemManager.\n"
-    "SUBSYSTEM==\"tty\", ATTRS{idVendor}==\"1915\", ATTRS{idProduct}==\"521f\", MODE=\"0660\", TAG+=\"uaccess\", ENV{ID_MM_DEVICE_IGNORE}=\"1\"\n";
+// kUdevRules: cmake/linux/60-openhouse.rules (generated/lh/udev_rules.h), what the Nix package installs too.
 
 // One root shell command through pkexec (the desktop's password prompt).
 bool AsRoot(const std::string& script, const std::vector<std::string>& args, std::string* error) {
@@ -383,11 +374,19 @@ bool AsRoot(const std::string& script, const std::vector<std::string>& args, std
 }  // namespace
 #endif
 
+// NixOS: /etc is read-only and built from the configuration; the rule comes from openhouse's NixOS
+// module (programs.openhouse.enable, flake.nix), never from here.
+bool NixOS() {
+  std::error_code ec;
+  return fs::exists("/etc/NIXOS", ec);
+}
+
 bool DeviceAccessInstalled() {
 #ifdef _WIN32
   return true;
 #else
   std::string text;
+  if (NixOS()) return ReadFile(kUdevPath, &text);   // the module's, whichever openhouse version it's from
   return ReadFile(kUdevPath, &text) && text == kUdevRules;
 #endif
 }
@@ -397,6 +396,10 @@ bool InstallDeviceAccess(std::string* error) {
   (void)error;
   return true;
 #else
+  if (NixOS()) {
+    *error = "On NixOS, add openhouse's NixOS module to your configuration (programs.openhouse.enable = true) and rebuild";
+    return false;
+  }
   const fs::path temp = DataDirectory() / "60-openhouse.rules";
   if (!WriteFileAtomic(temp, kUdevRules)) { *error = "couldn't write " + Utf8(temp); return false; }
   const bool ok = AsRoot(std::string("install -m 0644 \"$1\" ") + kUdevPath +
@@ -413,7 +416,7 @@ bool RemoveDeviceAccess(std::string* error) {
   return true;
 #else
   std::error_code ec;
-  if (!fs::exists(kUdevPath, ec)) return true;
+  if (NixOS() || !fs::exists(kUdevPath, ec)) return true;   // NixOS: the module's, removed with it
   return AsRoot(std::string("rm -f ") + kUdevPath + " && udevadm control --reload-rules", {}, error);
 #endif
 }
@@ -552,6 +555,15 @@ void InstallDriver(const fs::path& steamvr, const InstallOptions& options, const
     }
     if (fs::exists(p.data / m.filename(), ec)) shortcuts.push_back({"doorman-dongle-manager", "Doorman Dongle Manager", "Doorman Dongle pairing, channels and firmware", p.data / m.filename(), icon("dongle-manager.png"), {}});
   }
+  // The installer this install came from (the saved package's): to reinstall, repair, uninstall or
+  // flash firmware later without finding the extracted package again.
+  if (const fs::path installer = saved / (std::string("openhouse-installer") + kExe); fs::exists(installer, ec))
+    shortcuts.push_back({"installer", std::string("openhouse installer (v") + lh::kVersion + ")",
+                         "Installs, repairs or removes openhouse, and flashes its firmware", installer, icon("openhouse.png"), {}});
+  // Run from the Nix store (the flake's package): its own menu entries are already there (openhouse,
+  // the dongle manager, the installer), so only the hidden Envision update check is written here.
+  if (Utf8(here).rfind("/nix/store/", 0) == 0)
+    shortcuts.erase(std::remove_if(shortcuts.begin(), shortcuts.end(), [](const Shortcut& s) { return !s.hidden; }), shortcuts.end());
 #ifndef _WIN32
   // Before 1.0.5 the update check was the "openhouse" entry's own Envision plugin (--check). That
   // entry now opens the openhouse window: if Envision had it ticked for the check, it's unticked,
