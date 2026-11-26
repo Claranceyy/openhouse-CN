@@ -6,6 +6,7 @@
 #include "doorman_link.h"
 #include "link.h"
 #include "banks.h"
+#include "target.h"
 
 #ifndef VARIANT_SD
 #error "build with -DVARIANT_SD=0 or 1"
@@ -30,7 +31,7 @@ typedef struct {
     uint32_t magic, type, pc, lr, psr, cfsr, hfsr, bfar, count, sum;
 } crash_rec_t;
 #define CRASH_MAGIC 0x43525348u   /* "CRSH" */
-#define crash ((volatile crash_rec_t *)0x2003E000)
+#define crash ((volatile crash_rec_t *)CRASH_ADDR)
 #define QUICK_CRASH_LIMIT 3       /* this many crashes in a row (each < 10 s uptime) -> UF2 bootloader */
 
 static uint32_t crash_sum(void) {
@@ -195,8 +196,8 @@ static void handle(const uint8_t *in, uint16_t len) {
     case 0x7D: {                                /* read memory: [addr u32][n <= 56]; flash, UICR, FICR, RAM */
         uint32_t a; memcpy(&a, in + 2, 4);
         uint8_t n = in[6] > 56 ? 56 : in[6];
-        const int ok = (a < 0x100000u && a + n <= 0x100000u) || (a >= 0x10000000u && a + n <= 0x10002000u) ||
-                       (a >= 0x20000000u && a + n <= 0x20040000u);
+        const int ok = (a < CHIP_FLASH_END && a + n <= CHIP_FLASH_END) || (a >= 0x10000000u && a + n <= 0x10002000u) ||
+                       (a >= RAM_BASE && a + n <= CHIP_RAM_END);
         if (!ok) { st = ST_BAD_ARG; break; }
         put32(d, a); d[4] = n; memcpy(d + 5, (const void *)a, n);
         break;
