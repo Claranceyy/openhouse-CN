@@ -9,6 +9,7 @@ openhouse-installer looks for it:
   firmwares/dongle/doorman-pca10059.hex               Nordic nRF52840 Dongle PCA10059 (same)
   firmwares/dongle/doorman-kuroshin.hex               Kuroshin dongle (same; DFU only by its reset pads)
     (the above are what a bootloader installs: boot stub + firmware, for a first install or a rescue)
+  firmwares/dongle/doorman-index.bin                  Valve Index HMD radio (one image at 0x26000, Valve's serial DFU)
   firmwares/dongle/bank/<board>-a.bin, -b.bin         the firmware for bank A / B: what a running
                                                       dongle updates itself with (board: sd, nosd,
                                                       holyiot, pca10059, kuroshin)
@@ -48,6 +49,7 @@ shutil.copy2(repo / 'doorman/dongle-fw/build/doorman_dongle_nosd.uf2', out / 'do
 shutil.copy2(repo / 'doorman/dongle-fw/build/doorman_dongle_holyiot.hex', out / 'dongle/doorman-holyiot.hex')
 shutil.copy2(repo / 'doorman/dongle-fw/build/doorman_dongle_pca10059.hex', out / 'dongle/doorman-pca10059.hex')
 shutil.copy2(repo / 'doorman/dongle-fw/build/doorman_dongle_kuroshin.hex', out / 'dongle/doorman-kuroshin.hex')
+shutil.copy2(repo / 'doorman/dongle-fw/build/doorman_dongle_idx.bin', out / 'dongle/doorman-index.bin')
 (out / 'dongle/bank').mkdir()
 for board in ('sd', 'nosd', 'holyiot', 'pca10059', 'kuroshin'):
     for bank in 'ab':

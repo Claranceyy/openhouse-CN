@@ -318,7 +318,7 @@ void Dongle::Poll(double now) {
       std::lock_guard lock(mutex_);
       state_.firmware = d[4] | d[5] << 8;
       state_.softdeviceVariant = d[6];
-      state_.board = d[57] <= 3 ? d[57] : 0;
+      state_.board = d[57] <= 4 ? d[57] : 0;
       state_.bank = d[59];
       state_.slotCount = d[60] >= 1 && d[60] <= kSlots ? d[60] : 8;
       state_.watchdog = d[7];
@@ -645,7 +645,7 @@ void DongleManager::Scan() {
     std::vector<Found> found;
     hid_device_info* list = hid_enumerate(kVid, kPid);
     for (hid_device_info* d = list; d; d = d->next)
-      if (Narrow(d->product_string).rfind("Doorman Dongle", 0) == 0 && d->interface_number <= 0)
+      if (Narrow(d->product_string).rfind("Doorman ", 0) == 0 && d->interface_number <= 0)
         found.push_back({d->path, "OHDG-" + Narrow(d->serial_number)});
     hid_free_enumeration(list);
     {

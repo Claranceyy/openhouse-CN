@@ -191,7 +191,16 @@ class Ui {
   // Dongle flow
   enum class DongleStep { Board, Detect, Flashing, Done } dongleStep_ = DongleStep::Board;
   int dongleBoard_ = 0;  // board picked: 0 UF2, 1 Holyiot 21017, 2 PCA10059 (DoormanDongleInfo::board)
-  struct DongleSeen { std::vector<Uf2Drive> drives; std::vector<std::string> ports; std::vector<DoormanDongleInfo> dongles; };
+  struct DongleSeen {
+    std::vector<Uf2Drive> drives;
+    std::vector<std::string> ports;
+    std::vector<DoormanDongleInfo> dongles;
+    std::vector<std::string> indexRadios, indexBootloaders;   // the Index's stock radios, and radios in Valve's bootloader
+  };
+  std::function<bool(Job&)> indexFlash_;   // waits for the Index warning's Continue
+  bool indexRestore_ = false;              // ...and it puts SteamVR's radio firmware back
+  bool indexRestoreOnly_ = false;          // the Index page from Restore Firmware: restore buttons only
+  void WatchDongles(int board);
   Watcher<DongleSeen> dongleSeen_;
   std::string dongleResult_;
 

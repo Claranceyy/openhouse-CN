@@ -1500,9 +1500,11 @@ void Ui::RestoreMenu() {
   ImGui::Dummy(ImVec2(0, ImGui::GetFontSize()));
   Prompt("What do you want to restore?");
   switch (Tiles({{Icon::BaseStation, "1.0 Base Stations", "Puts Valve's base station firmware back"},
-                 {Icon::Tracker, "Trackers & Controllers", "Puts the original radio firmware back"}})) {
+                 {Icon::Tracker, "Trackers & Controllers", "Puts the original radio firmware back"},
+                 {Icon::Headset, "Valve Index", "Puts SteamVR's radio firmware back"}})) {
     case 0: Go(Page::RestoreBase); break;
     case 1: Go(Page::RestoreRadioMenu); break;
+    case 2: Go(Page::Dongle); WatchDongles(4); indexRestoreOnly_ = true; break;
   }
   Back(Page::Home);
 }
@@ -1655,30 +1657,41 @@ void Ui::BaseStationPage(bool restore) {
 
 // ---- dongle ----
 
+// Watches for a board's dongles (and, for the Index, its radios and Valve bootloaders): the Detect step.
+void Ui::WatchDongles(int board) {
+  dongleBoard_ = board;
+  indexRestoreOnly_ = false;
+  dongleStep_ = DongleStep::Detect;
+  dongleSeen_.Start([board] {
+    DongleSeen s;
+    if (board == 4) {
+      s.indexRadios = FindIndexRadios();
+      for (const auto& p : lh::dfu::FindValveBootloaders()) s.indexBootloaders.push_back(p.serial);
+    } else if (board) {
+      s.ports = lh::dfu::FindBootloaderPorts();
+    } else {
+      s.drives = FindUf2Drives();
+    }
+    for (auto& d : FindDoormanDongles())
+      if (d.board == board) s.dongles.push_back(d);
+    return s;
+  }, 1.0);
+}
+
 void Ui::DonglePage() {
   Title("Dongle Firmware");
   switch (dongleStep_) {
     case DongleStep::Board: {
       ImGui::Dummy(ImVec2(0, ImGui::GetFontSize()));
       Prompt("Which dongle do you have?");
-      const auto watch = [this](int board) {
-        dongleBoard_ = board;
-        dongleStep_ = DongleStep::Detect;
-        dongleSeen_.Start([board] {
-          DongleSeen s;
-          if (board) s.ports = lh::dfu::FindBootloaderPorts();
-          else s.drives = FindUf2Drives();
-          for (auto& d : FindDoormanDongles())
-            if (d.board == board) s.dongles.push_back(d);
-          return s;
-        }, 1.0);
-      };
+      const auto watch = [this](int board) { WatchDongles(board); };
       // Board ids (DoormanDongleInfo::board) in tile order.
-      static constexpr int kBoards[] = {1, 2, 0, 3};
+      static constexpr int kBoards[] = {1, 2, 0, 3, 4};
       const int tile = Tiles({{Icon::Dongle, "Holyiot 21017", "Nordic bootloader", Tint::None, "Recommended"},
                               {Icon::Dongle, "Nordic PCA10059 Dongle", "Nordic bootloader"},
                               {Icon::Dongle, "ProMicro nRF52840", "Adafruit bootloader. Soldering an antenna to the board is highly recommended"},
-                              {Icon::Dongle, "Kuroshin", "It needs to be put into DFU mode by opening the dongle and shorting two pins"}},
+                              {Icon::Dongle, "Kuroshin", "It needs to be put into DFU mode by opening the dongle and shorting two pins"},
+                              {Icon::Headset, "Valve Index", "The headset's own radio. Index only", Tint::Yellow}},
                              ImGui::GetFontSize() * 15);
       if (tile >= 0) watch(kBoards[tile]);
       Back(Page::DoormanMenu);
@@ -1688,11 +1701,17 @@ void Ui::DonglePage() {
       const DongleSeen seen = dongleSeen_.Value();
       // Back: to the board picker.
       const auto back = [this] {
-        if (BackButton()) { dongleSeen_.Stop(); dongleStep_ = DongleStep::Board; }
+        if (BackButton()) {
+          dongleSeen_.Stop();
+          if (indexRestoreOnly_) Go(Page::RestoreMenu);
+          else dongleStep_ = DongleStep::Board;
+        }
       };
       if (!DeviceAccess()) { back(); return; }
-      Step(1, "Plug the dongle in");
-      Step(2, dongleBoard_ == 3 ? "If it doesn't show up, open the dongle and briefly short pads 1 and 5 to put it in DFU mode"
+      Step(1, dongleBoard_ == 4 ? "Plug the headset in and close SteamVR" : "Plug the dongle in");
+      Step(2, dongleBoard_ == 4 ? (indexRestoreOnly_ ? "The radio running Doorman gets SteamVR's firmware back"
+                                                     : "One of the headset's two radios gets Doorman, the other stays with SteamVR")
+              : dongleBoard_ == 3 ? "If it doesn't show up, open the dongle and briefly short pads 1 and 5 to put it in DFU mode"
               : dongleBoard_ == 1 ? "If it doesn't show up, bring a magnet close to the dongle's LED window to put it in DFU mode"
               : dongleBoard_ ? "If it doesn't show up, press its RESET button to put it in DFU mode"
                              : "If it doesn't show up, short the RST and GND pins twice to put it in DFU mode");
@@ -1729,7 +1748,8 @@ void Ui::DonglePage() {
         ImGui::EndGroup();
       }
       ImGui::Spacing();
-      if (seen.drives.empty() && seen.ports.empty() && seen.dongles.empty()) ImGui::TextColored(kMuted, "Waiting for the dongle...");
+      if (seen.drives.empty() && seen.ports.empty() && seen.dongles.empty() && seen.indexRadios.empty() && seen.indexBootloaders.empty())
+        ImGui::TextColored(kMuted, dongleBoard_ == 4 ? "Waiting for the headset..." : "Waiting for the dongle...");
       // It restarts as a Doorman Dongle: check it answers.
       // A wall-clock deadline, not a pass count: a dongle that shows up but doesn't answer makes each
       // write block ~5 s in the kernel (Linux hidraw), so 200 passes took ~17 minutes.
@@ -1781,6 +1801,96 @@ void Ui::DonglePage() {
         dongleStep_ = DongleStep::Flashing;
         job_.Start(std::move(work));
       };
+      if (dongleBoard_ == 4) {
+        ImGui::Spacing();
+        ImGui::TextColored(kWarn, "Only for the Valve Index. Don't use it on any other headset");
+        if (!indexRestoreOnly_)
+        {
+          ImGui::TextColored(kWarn, "Using a dongle is recommended over the Index in the case of something going wrong!");
+          ImGui::TextColored(kWarn, "Old firmware can be restored through the Restore Firmware button on the main page!");
+        }
+        ImGui::Spacing();
+        if (steamvr_.root.empty()) {
+          ImGui::TextColored(kBad, "SteamVR not found");
+          if (BigButton("Choose SteamVR folder")) askSteamVR_ = true;
+          back();
+          return;
+        }
+        // serial: the radio's USB serial ("" for ours: the bootloader that appears). enter: into its bootloader.
+        // restore: SteamVR's stock radio firmware back on it.
+        const auto ask = [this](const std::string& serial, std::function<bool()> enter, bool restore) {
+          indexRestore_ = restore;
+          indexFlash_ = [serial, enter, restore, steam = Utf8(steamvr_.root)](Job& j) {
+            const std::string package = IndexRadioPackage(steam);
+            const fs::path image = FirmwareFolder() / "dongle" / "doorman-index.bin";
+            j.Log("Firmware: " + (restore ? "stock, from " + package.substr(package.find_last_of("/\\") + 1) : Utf8(image.filename())));
+            if (!serial.empty()) j.Log("Radio: " + serial);
+            const size_t stockBefore = FindIndexRadios().size();
+            std::string error;
+            if (!FlashIndexRadio(serial, enter, restore ? std::string() : Utf8(image), package,
+                                 [&](float f, const std::string& what) { j.Status(f * 0.8f, what); }, &error)) {
+              j.Fail(error);
+              return false;
+            }
+            if (!restore) return verify(j);
+            // Back as a stock radio: one more 28DE:2102 than before, and no Doorman Index radio.
+            for (int i = 0; i < 100; ++i) {
+              j.Status(0.8f + 0.2f * float(i) / 100.f, "Verifying");
+              std::this_thread::sleep_for(std::chrono::milliseconds(200));
+              const auto ours = FindDoormanDongles();
+              if (FindIndexRadios().size() > stockBefore &&
+                  std::none_of(ours.begin(), ours.end(), [](const DoormanDongleInfo& d) { return d.IndexRadio(); })) {
+                j.Log("The radio is back on SteamVR's firmware");
+                j.Status(1, "Done");
+                return true;
+              }
+            }
+            j.Fail("the radio didn't come back, power cycle the headset");
+            return false;
+          };
+          ImGui::OpenPopup("Flash the Index?");
+        };
+        const float bw = ImGui::GetFontSize() * 34;
+        bool ours = false;
+        for (const auto& d : seen.dongles) {
+          if (!d.IndexRadio()) continue;
+          ours = true;   // one radio already runs Doorman: never a second one
+          const std::string label = "Doorman Valve Index Radio " + d.serial;
+          ImGui::PushID(d.path.c_str());
+          if (!indexRestoreOnly_ && BigButton(label.c_str(), bw)) ask("", [d] { return RebootToBootloader(d); }, false);
+          if (BigButton("Restore SteamVR's radio firmware", bw)) ask("", [d] { return RebootToBootloader(d); }, true);
+          ImGui::PopID();
+        }
+        const std::string pick = ours || indexRestoreOnly_ ? "" : PickIndexRadio(seen.indexRadios);
+        if (!pick.empty() && BigButton(("Valve Index radio " + pick).c_str(), bw)) ask(pick, [pick] { return TriggerIndexRadioDfu(pick); }, false);
+        if (!ours)
+          for (const auto& serial : seen.indexBootloaders) {
+            ImGui::PushID(serial.c_str());
+            if (!indexRestoreOnly_ && BigButton(("Index radio in its bootloader " + serial).c_str(), bw)) ask(serial, [] { return true; }, false);
+            if (BigButton(("Restore SteamVR's radio firmware on " + serial).c_str(), bw)) ask(serial, [] { return true; }, true);
+            ImGui::PopID();
+          }
+        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+        if (ImGui::BeginPopupModal("Flash the Index?", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
+          const float fs = ImGui::GetFontSize();
+          ImGui::PushTextWrapPos(fs * 30);
+          ImGui::TextColored(kWarn, "This is only for the Valve Index, not for any other headset.");
+          if (indexRestore_)
+            ImGui::TextUnformatted("The radio gets SteamVR's own firmware back. If something goes wrong, the headset has to be "
+                                   "physically opened to fix it. Are you sure you want to continue?");
+          else
+            ImGui::TextUnformatted("Buying a dongle is recommended over this. If something goes wrong, the headset has to be physically "
+                                   "opened to fix it. Are you sure you want to continue?");
+          ImGui::PopTextWrapPos();
+          ImGui::Spacing();
+          if (BigButton("Continue", fs * 9)) { ImGui::CloseCurrentPopup(); start(indexFlash_); }
+          ImGui::SameLine();
+          if (BigButton("Cancel", fs * 9)) ImGui::CloseCurrentPopup();
+          ImGui::EndPopup();
+        }
+        back();
+        return;
+      }
       for (const auto& d : seen.drives) {
         const std::string label = d.name + (d.board.empty() ? "" : "  (" + d.board + ")");
         if (BigButton(label.c_str(), ImGui::GetFontSize() * 34)) start([d](Job& j) { return flashUf2(j, d); });
@@ -2088,9 +2198,9 @@ void Ui::DongleUpdatePick() {
     char sub[96];
     if (update) std::snprintf(sub, sizeof sub, "Update available (firmware %04X)", d.firmware);
     else std::snprintf(sub, sizeof sub, "Up to date (firmware %04X)", d.firmware);
-    const std::string title = "Doorman Dongle " + d.serial;
+    const std::string title = (d.IndexRadio() ? "Doorman Valve Index Radio " : "Doorman Dongle ") + d.serial;
     ImGui::PushID(d.serial.c_str());
-    if (TileGrid({{Icon::Dongle, title.c_str(), sub, update ? Tint::Yellow : Tint::None}}, 1) == 0) {   // sized to its text
+    if (TileGrid({{d.IndexRadio() ? Icon::Headset : Icon::Dongle, title.c_str(), sub, update ? Tint::Yellow : Tint::None}}, 1) == 0) {   // sized to its text
       updateDongle_ = d;
       Go(Page::DongleUpdate);
     }
@@ -2154,6 +2264,24 @@ void Ui::StartDongleUpdate(const std::vector<DongleSlot>& slots) {
     }
     // Then the dongle.
     if (packaged && dongle.firmware == packaged) { set(-1, 2, "Up to date"); remember(); return true; }
+    if (dongle.IndexRadio()) {   // through Valve's bootloader, with SteamVR's package as the reference
+      set(-1, 1, "Updating");
+      std::string error;
+      const fs::path image = FirmwareFolder() / "dongle" / "doorman-index.bin";
+      if (FlashIndexRadio("", [dongle] { return RebootToBootloader(dongle); }, Utf8(image), IndexRadioPackage(Utf8(steamvr_.root)),
+                          [&](float p, const std::string&) { j.Status((float(step) + p) / float(steps), "Updating the radio"); }, &error)) {
+        for (int i = 0; i < 100; ++i) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(200));
+          for (const auto& d : FindDoormanDongles())
+            if (d.IndexRadio() && d.firmware == packaged) { set(-1, 2, "Updated"); j.Status(1, "Done"); remember(); return true; }
+        }
+        error = "it didn't come back with the new firmware";
+      }
+      j.Log("Radio: " + error);
+      set(-1, 3, "Failed. Power cycle the headset and try again from Install or Update Firmware > Doorman > Valve Index");
+      j.Fail("the radio wasn't updated");
+      return false;
+    }
     if (!dongle.Banked()) {
       set(-1, 3, "Its firmware is too old to update here: use Install or Update Firmware > Doorman");
       j.Fail("the dongle wasn't updated");
@@ -2192,7 +2320,7 @@ void Ui::StartDongleUpdate(const std::vector<DongleSlot>& slots) {
 }
 
 void Ui::DongleUpdatePage() {
-  Title(("Update Doorman Dongle " + updateDongle_.serial).c_str());
+  Title(((updateDongle_.IndexRadio() ? "Update Doorman Valve Index Radio " : "Update Doorman Dongle ") + updateDongle_.serial).c_str());
   const bool started = job_.Running() || job_.Finished();
   std::vector<DongleSlot> slots;
   std::map<int, SlotResult> results;
@@ -2300,7 +2428,7 @@ void Ui::DongleUpdatePage() {
   if (job_.Running()) return;
 
   if (!RuntimesClosed()) { Back(Page::DongleUpdatePick); return; }
-  if (!updateDongle_.Banked()) {
+  if (!updateDongle_.Banked() && !updateDongle_.IndexRadio()) {
     ImGui::TextColored(kWarn, "This dongle's firmware is too old to update here: use Install or Update Firmware > Doorman");
     Back(Page::DongleUpdatePick);
     return;

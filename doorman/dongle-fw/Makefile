@@ -1,5 +1,6 @@
 # Doorman dongle firmware (ai/doorman/dongle-fw.md)
 # make            -> every board's install image and bank images (below)
+# make idx       -> the Valve Index HMD radio image (ai/doorman/index-radio.md)
 # make check-nrf52833 -> compile/link and convert the board-independent build check
 CC = arm-none-eabi-gcc
 OBJCOPY = arm-none-eabi-objcopy
@@ -37,7 +38,7 @@ board_flags = -DVARIANT_SD=$(call uses_sd,$(1)) -DBANK_LAYOUT_SD=$(call uses_sd,
   -DBOARD_KUROSHIN=$(if $(filter kuroshin,$(1)),1,0)
 
 all: $(foreach v,$(VARIANTS),build/doorman_dongle_$(v).hex build/doorman_dongle_$(v)_a.bin build/doorman_dongle_$(v)_b.bin) \
-  build/doorman_dongle_sd.uf2 build/doorman_dongle_nosd.uf2
+  build/doorman_dongle_sd.uf2 build/doorman_dongle_nosd.uf2 build/doorman_dongle_idx.bin
 
 define variant
 build/doorman_dongle_$(1).uf2: UF2_FAMILY = $(family_$(call soc,$(1)))
@@ -58,6 +59,18 @@ $(foreach v,$(VARIANTS) check_52833,$(eval $(call variant,$(v))))
 # Exercises both banks and the install-image pipeline. These files have no board-specific pin map.
 check-nrf52833: build/doorman_dongle_check_52833.uf2 build/doorman_dongle_check_52833_b.bin
 
+# Valve Index HMD radio ("gravidongle", ai/doorman/index-radio.md): nRF52840 + S140 6.1.1, one image at 0x26000
+# updated through Valve's serial-DFU bootloader; no banks, no stub.
+build/doorman_dongle_idx.elf: Makefile $(call sources,nrf52840) $(call startup,idx) src/*.h ../common/*.h $(NRFX)/mdk/nrf_common.ld ld/app_idx.ld
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(call chip_flags,idx) -DVARIANT_SD=1 -DBANK_LAYOUT_SD=0 -DBOARD_IDX=1 $(call sources,nrf52840) $(call startup,idx) \
+	  $(LDFLAGS) -Tld/app_idx.ld -Wl,-Map=build/doorman_dongle_idx.map -o $@
+	arm-none-eabi-size $@
+build/doorman_dongle_idx.bin: build/doorman_dongle_idx.elf
+	$(OBJCOPY) -O binary $< $@
+	truncate -s %4 $@
+idx: build/doorman_dongle_idx.bin
+
 # a bank image as raw bytes from its first address, padded to whole words
 build/%_a.bin: build/%_a.elf
 	$(OBJCOPY) -O binary $< $@
@@ -74,4 +87,4 @@ build/%.uf2: build/%.hex
 clean:
 	rm -rf build
 .SECONDARY:
-.PHONY: all clean check-nrf52833
+.PHONY: all clean check-nrf52833 idx

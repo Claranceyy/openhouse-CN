@@ -96,12 +96,14 @@ struct DoormanDongleInfo {
   std::string serial, path;
   uint16_t firmware = 0;
   bool softDeviceBuild = false;  // running the "_sd" build
-  int board = 0;                 // 0 UF2 (Pro Micro style), 1 Holyiot 21017, 2 PCA10059, 3 Kuroshin (Nordic DFU)
+  int board = 0;                 // 0 UF2 (Pro Micro style), 1 Holyiot 21017, 2 PCA10059, 3 Kuroshin (Nordic DFU),
+                                 // 4 Valve Index HMD radio (Valve's bootloader)
   int bank = 0;                  // the bank it runs from (1 A, 2 B); 0: older firmware without banks
   int slots = 8;                 // the slots it has (it says so from firmware 0x002A; older ones have 8)
   int oldRadios = -1;            // its connected devices whose radio has an update (-1: not asked)
   bool NordicDfu() const { return board >= 1 && board <= 3; }
   bool Banked() const { return bank != 0; }   // updates itself over USB, no bootloader
+  bool IndexRadio() const { return board == 4; }
 };
 std::vector<DoormanDongleInfo> FindDoormanDongles();
 bool RebootToBootloader(const DoormanDongleInfo& d);  // its UF2 drive appears (Nordic DFU boards: its serial port)
@@ -118,6 +120,19 @@ std::vector<DongleSlot> ScanDongleSlots(const DoormanDongleInfo& dongle);   // e
 bool SetRememberedRadio(const std::string& donglePath, int slot, uint32_t version);
 // Turns a device on a Doorman Dongle off (its main MCU's power-off command, as the driver sends it).
 void PowerOffDevice(const WirelessDevice& device);
+
+// ---- the Valve Index HMD's radio as a Doorman dongle ----
+// The headset has two radios (28DE:2102); one is flashed, the other is left to SteamVR.
+std::vector<std::string> FindIndexRadios();               // stock radios' USB serials
+std::string PickIndexRadio(const std::vector<std::string>& serials);   // the one to flash ("" none)
+// SteamVR's newest Index radio package (its signed init packet is the reference), "" none.
+std::string IndexRadioPackage(const std::string& steamvrRoot);
+// Flashes Doorman onto an Index radio (image "": SteamVR's stock radio firmware out of the package,
+// for a restore; either way signed at the version the bootloader holds). enterDfu puts it in Valve's bootloader (a stock radio: the
+// HID request; ours: cmd 0x10); serial: its USB serial, "" to take the bootloader that appears.
+bool FlashIndexRadio(const std::string& serial, const std::function<bool()>& enterDfu, const std::string& image,
+                     const std::string& package, const Progress& progress, std::string* error);
+bool TriggerIndexRadioDfu(const std::string& serial);    // a stock radio into its bootloader
 
 // A banked dongle writes `image` (the firmware for the bank it isn't running) and restarts into it.
 bool BankUpdate(const DoormanDongleInfo& d, std::vector<uint8_t> image, const std::function<void(float)>& progress,

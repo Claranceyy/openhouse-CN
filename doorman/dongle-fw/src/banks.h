@@ -19,7 +19,13 @@
 #error "Select a supported flash layout for the target SoC"
 #endif
 
-#if BANK_LAYOUT_833_UF2
+#if BOARD_IDX
+/* Index HMD radio: no banks, one image at 0x26000 updated through Valve's serial DFU (ai/doorman/index-radio.md). */
+#define BANK_A          0x00026000u
+#define BANK_B          0x00026000u
+#define BANK_SIZE       0x000B9000u
+#define PAIR_PAGE       0x000DF000u        /* last page before Valve's bootloader (0xE0000) */
+#elif BANK_LAYOUT_833_UF2
 /* UF2 without SoftDevice, app at 0x1000. Keep the original receiver storage at 0x6E000. */
 #define BANK_A          0x00010000u
 #define BANK_B          0x00030000u
