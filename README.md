@@ -23,7 +23,7 @@
 **[openhouse](https://github.com/YusufOzmen01/openhouse)** 是 SteamVR 原厂 Lighthouse 定位驱动的开源替代方案，支持 Windows 与 Linux（兼容 SteamVR、Monado / WiVRn 及独立运行），带来统一房间建图、更稳健的防漂移/遮挡恢复等诸多改进，同时内置：
 
 - **lhbs**：开源 Lighthouse 1.0 基站固件，突破原厂 2 基站上限，支持同时使用**最多 4 个 1.0 基站**。
-- **Doorman**：自研开源 2.4 GHz 跳频无线协议，单枚通用 nRF52840 接收器即可同时连接**多达 8～10 台**追踪器与手柄。
+- **Doorman**：自研开源 2.4 GHz 跳频无线协议，单枚通用 nRF52840 接收器即可同时连接**多达 8～10 台**追踪器与手柄。**注**：**HTC原厂watchman接收器**不支持此协议，想要使用此协议必须购买基于**nRF52840的无线收发产品**（兼容名单请看原文），HTC原厂接收器也可以使用且**无需刷机**，**只可**享受此软件的定位优化算法，减少丢追/房间学习等功能
 
 <div align="center">
 <img src="images/overlay-overview.png" width="800">
