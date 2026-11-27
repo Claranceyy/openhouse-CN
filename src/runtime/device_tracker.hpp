@@ -156,6 +156,11 @@ class DeviceTracker {
   // converging: the carried calibration may be why (CheckHealth drops it after kCarryStrikes).
   std::vector<std::pair<uint32_t, uint32_t>> contradictions_;
   bool acquiredWithCarry_ = false;
+  // When this acquisition's filter first counted as calibrated (0: not yet): its tilt only levels
+  // the room after kLevelAfter of it, and never as more certain than kTiltFloor.
+  double calibratedAt_ = 0;
+  static constexpr double kLevelAfter = 20.0;                                   // s
+  static constexpr double kTiltFloor = 0.25 * 0.25 * 3.046174197867086e-4;      // (0.25 deg)^2
   int carryStrikes_ = 0;
   static constexpr int kCarryStrikes = 3;
   bool hadTrack_ = false;

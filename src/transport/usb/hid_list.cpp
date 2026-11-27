@@ -41,7 +41,9 @@ bool ParseHidPath(const std::string& path, uint16_t* vid, uint16_t* pid, int* if
   std::string lower = path;
   for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
   if (!HexAfter(lower, "vid_", vid) || !HexAfter(lower, "pid_", pid)) return false;
-  *iface = -1;
+  // No "mi_": a device with one interface, interface 0 (as hidapi has it). The Vive Watchman
+  // dongle is one; taken as -1, every one was left out.
+  *iface = 0;
   const size_t mi = lower.find("&mi_");
   if (mi != std::string::npos && mi + 6 <= lower.size() && std::isxdigit(static_cast<unsigned char>(lower[mi + 4])) &&
       std::isxdigit(static_cast<unsigned char>(lower[mi + 5])))
