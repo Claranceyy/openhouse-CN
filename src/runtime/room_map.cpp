@@ -98,6 +98,8 @@ bool RoomMap::Load(const std::string& path, std::string* error) {
         base.observations = b.value("observations", 0);
         base.storedObservations = base.observations;
         base.origin = b.value("origin", false);
+        // (a room saved before levels were averaged: one levelled by the devices counts as settled)
+        base.levelSamples = b.value("levelSamples", base.origin && base.rotationVariance < 1e-4 ? kSettledSamples : 0);
         // A base the room solver placed from many keyframes in an earlier session:
         // the next session's first solves (a keyframe or two) refine it gently instead
         // of replacing it at once.
@@ -180,6 +182,7 @@ bool RoomMap::Save(const std::string& path, std::string* error) const {
         json jb = {{"serial", serial}, {"pose", PoseJson(b.worldFromBase)},
                    {"positionVariance", b.positionVariance}, {"rotationVariance", b.rotationVariance},
                    {"observations", b.observations}, {"origin", b.origin}};
+        if (b.origin) jb["levelSamples"] = b.levelSamples;
         if (b.resetCount) jb["resetCount"] = *b.resetCount;
         bases.push_back(jb);
       }
@@ -458,7 +461,7 @@ void RoomMap::SetOotxFrame(uint32_t serial, const std::vector<uint8_t>& frame) {
 void RoomMap::SetConflictedBases(std::set<uint32_t> bases) {
   if (bases == conflictedBases_) return;
   for (uint32_t serial : bases) solvedTarget_.erase(serial);
-  if (bases.contains(Origin())) levelTarget_.reset();
+  if (bases.contains(Origin())) { levelTarget_.reset(); levelUp_.reset(); }
   conflictedBases_ = std::move(bases);
   ++revision_;
   ++bumps_;  // Discard room solves that used observations from before the conflict.
@@ -930,15 +933,13 @@ void RoomMap::Advance(double time) {
 // the next estimate differed by 0.4-2.8 deg. Settled: no new level for kQuiet seconds, and none
 // still gliding in. A stored room that isn't re-levelled when it loads is settled at once.
 bool RoomMap::LevelSettled() const {
-  constexpr double kQuiet = 60, kApplied = 0.05 * 0.017453292519943295;
+  constexpr double kApplied = 0.05 * 0.017453292519943295;
   const Room* room = Active();
   if (!room) return false;
   for (const auto& [serial, b] : room->bases) {
     if (!b.origin) continue;
-    // No level this session: a stored room's (a fresh origin has only its base's accelerometer, 1.5e-4).
-    if (!levelTarget_) return b.rotationVariance < 1e-4;
-    if (!(advanceTime_ - levelTargetAt_ > kQuiet)) return false;
-    return Eigen::AngleAxisd(*levelTarget_ * b.worldFromBase.rotation().transpose()).angle() < kApplied;
+    if (b.levelSamples < kSettledSamples) return false;
+    return !levelTarget_ || Eigen::AngleAxisd(*levelTarget_ * b.worldFromBase.rotation().transpose()).angle() < kApplied;
   }
   return false;
 }
@@ -950,15 +951,59 @@ bool RoomMap::RefineOriginTilt(uint32_t serial, const std::array<double, 2>& til
   auto found = room->bases.find(serial);
   if (found == room->bases.end() || !found->second.origin) return false;
   RoomBase& origin = found->second;
-  if (tiltVariance < 0.5 * origin.rotationVariance) {
-    levelTarget_ = Leveling(tilt[0], tilt[1], 0);
-    levelTargetAt_ = advanceTime_;   // host time (time is the device filter's clock)
-    origin.rotationVariance = tiltVariance;
-    const double angle = Eigen::AngleAxisd(*levelTarget_ * origin.worldFromBase.rotation().transpose()).angle();
-    if (angle > 0.0017) {
+  // The room's level is the average of the devices' estimates of the origin's tilt, over time and over
+  // devices, not the surest one. A device's estimate wanders 1.5-4 deg within a session (its accelerometer's
+  // error shows in it differently as it's held one way or another) while the devices' averages agree to about
+  // 0.5 deg; the claimed variance is no guide (0.04-0.15 deg claimed). Taking the surest estimate re-levelled
+  // rooms by 1-4.5 deg, somewhere else every session, and a stored room by 0.9 deg two minutes in: the floor
+  // tilted. One estimate is taken every kSampleEvery, from whichever device is tracking from the origin, and
+  // moves the level by 1/n of the way to it (n capped at kMaxSamples, so a level that was wrong still follows,
+  // slowly). The first replaces the level the origin's own accelerometer gave. The count is kept with the room.
+  constexpr double kSampleEvery = 2, kUnconverged = 1.0 * 1.0 * 3.046174197867086e-4;   // (1 deg)^2
+  // The origin's variance as the room solver and the filters' recorded tilt see it: (0.25 deg)^2 after the first
+  // estimate, as a device's first level was given before, and smaller with more.
+  constexpr double kSampleVariance = 0.25 * 0.25 * 3.046174197867086e-4;
+  constexpr int kMaxSamples = 200;
+  constexpr double kNewLevel = 0.2 * 0.017453292519943295;
+  // Far from the level, an estimate is wrong, whatever it claims: in fast swings and spins estimates 15-25
+  // deg off passed as converged, and even at 1/31 weight each tilted a stored room by 0.5-0.8 deg. Devices
+  // that are fine disagree by 2-3 deg at most; a level from the origin's accelerometer alone can be 4-5 deg
+  // off, so a level still being learned takes more.
+  constexpr double kOutlierSettled = 3.0 * 0.017453292519943295, kOutlierLearning = 8.0 * 0.017453292519943295;
+  const Eigen::Vector3d upNow = origin.worldFromBase.rotation().transpose() * Eigen::Vector3d::UnitY();
+  const Eigen::Vector3d upEstimate = Leveling(tilt[0], tilt[1], 0).transpose() * Eigen::Vector3d::UnitY();
+  const double off = std::acos(std::clamp((levelUp_ ? *levelUp_ : upNow).dot(upEstimate), -1.0, 1.0));
+  const bool outlier = off > (origin.levelSamples >= kSettledSamples ? kOutlierSettled : kOutlierLearning) &&
+                       origin.levelSamples > 0;   // (the first device level replaces the accelerometer's, whatever it is)
+  if (tiltVariance < kUnconverged && !outlier && !(advanceTime_ - levelSampleAt_ < kSampleEvery)) {
+    levelSampleAt_ = advanceTime_;
+    const int n = std::min(origin.levelSamples + 1, kMaxSamples);
+    // Averaged as the world's up seen from the origin (its base frame): only the tilt. A whole rotation
+    // averaged toward the estimate's (heading 0) turned a stored room's heading too, ~1 deg a sample.
+    const Eigen::Matrix3d now = origin.worldFromBase.rotation();
+    if (origin.levelSamples == 0) {
+      levelUp_ = upEstimate;
+    } else {
+      if (!levelUp_) levelUp_ = Eigen::Vector3d(now.transpose() * Eigen::Vector3d::UnitY());   // a stored level
+      levelUp_ = (*levelUp_ + (upEstimate - *levelUp_) / double(n)).normalized();
+    }
+    // The least turn of the room that makes that direction the world's up (its heading stays).
+    const Eigen::Matrix3d next = Eigen::Quaterniond::FromTwoVectors(now * *levelUp_, Eigen::Vector3d::UnitY()).toRotationMatrix() * now;
+    // The variance only while the level is learned: the filters take it as the recorded tilt's, and a settled
+    // room's changing with every sample changed tracking in replays though the level moved 0.001 deg.
+    if (origin.levelSamples < kSettledSamples) origin.rotationVariance = std::max(kSampleVariance / n, 1e-7);
+    origin.levelSamples = n;
+    const double moved = levelTarget_ ? Eigen::AngleAxisd(next * levelTarget_->transpose()).angle()
+                                      : Eigen::AngleAxisd(next * origin.worldFromBase.rotation().transpose()).angle();
+    // Under kApplyMin from the room's level, nothing to turn: the average goes on in levelUp_, and the bases
+    // aren't touched (turning them by thousandths of a degree changed tracking in replays).
+    constexpr double kApplyMin = 0.05 * 0.017453292519943295;
+    if (levelTarget_ || moved >= kApplyMin || origin.levelSamples < kSettledSamples) levelTarget_ = next;
+    if (moved > kNewLevel) {
+      levelTargetAt_ = advanceTime_;
       char text[200];
-      std::snprintf(text, sizeof text, "Re-levelling room %s from %08X tilt by %.2f deg (sigma %.2f deg)%s", room->id.c_str(), serial,
-                    angle * 57.29577951308232, std::sqrt(tiltVariance) * 57.29577951308232, levelled_ ? " (gradually)" : "");
+      std::snprintf(text, sizeof text, "Re-levelling room %s from %08X tilt by %.2f deg (%d estimates)%s", room->id.c_str(), serial,
+                    moved * 57.29577951308232, n, levelled_ ? " (gradually)" : "");
       Log(text);
     }
   }
@@ -1003,6 +1048,8 @@ void RoomMap::ForgetAll() {
   lastObservation_.clear();
   relearned_.clear();
   levelTarget_.reset();
+  levelUp_.reset();
+  levelSampleAt_ = std::numeric_limits<double>::quiet_NaN();
   levelTime_ = advanceTime_ = levelTargetAt_ = std::numeric_limits<double>::quiet_NaN();
   solvedTarget_.clear();
   levelled_ = false;

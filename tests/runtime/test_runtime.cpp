@@ -551,25 +551,45 @@ TEST(RoomMap, LevelAndSolverCorrectionsAreNeverSteps) {
 // settled; a level is once no new one has come for 60 s and it has glided in; a stored room's
 // origin (small variance, no level this session) is settled at once.
 TEST(RoomMap, LevelSettlesOnceItStopsChanging) {
+  // The level is the average of the devices' estimates, one every 2 s: settled after kSettledSamples of
+  // them, once the level has glided in.
   RoomMap room;
   room.OnBaseSeen(Config(1), {});
   ASSERT_TRUE(room.EstablishOrigin(1, {0.0, 0.0}, 1.5e-4));  // its accelerometer only
   double t = 100;
   room.Advance(t);
   EXPECT_FALSE(room.LevelSettled());
-  for (; t < 103; t += 0.01) { room.Advance(t); room.RefineOriginTilt(1, {0.03, 0}, 1e-6, t); }
-  EXPECT_FALSE(room.LevelSettled()) << "levelled, but only just";
-  for (; t < 160; t += 0.01) room.Advance(t);
-  EXPECT_FALSE(room.LevelSettled()) << "57 s after the level";
-  for (; t < 164; t += 0.01) room.Advance(t);
+  for (; t < 110; t += 0.01) { room.Advance(t); room.RefineOriginTilt(1, {0.03, 0}, 1e-6, t); }
+  EXPECT_FALSE(room.LevelSettled()) << "levelled, but from a few estimates";
+  EXPECT_LT(room.Base(1)->levelSamples, RoomMap::kSettledSamples);
+  for (; t < 175; t += 0.01) { room.Advance(t); room.RefineOriginTilt(1, {0.03, 0}, 1e-6, t); }
+  EXPECT_GE(room.Base(1)->levelSamples, RoomMap::kSettledSamples);
   EXPECT_TRUE(room.LevelSettled());
-  // a better estimate starts the wait again
-  room.RefineOriginTilt(1, {0.04, 0}, 1e-7, t);
-  EXPECT_FALSE(room.LevelSettled());
 
+  // An estimate that claims to be sure counts no more than any other: a stray one 1.7 deg off (claiming
+  // 0.02 deg) moves a level of 30+ estimates by under 0.1 deg. One not converged yet isn't taken.
+  const auto pitchOf = [](const RoomMap& r) { return std::asin(std::clamp(-r.Base(1)->worldFromBase.rotation()(1, 2), -1.0, 1.0)); };
+  const double before = pitchOf(room);
+  room.RefineOriginTilt(1, {0.06, 0}, 1e-7, t);
+  for (double u = t; u < t + 60; u += 0.01) room.Advance(u), room.RefineOriginTilt(1, {0.03, 0}, 1e-6, u);
+  t += 60;
+  EXPECT_LT(std::abs(pitchOf(room) - before), 0.1 * 0.0175) << "a stray estimate barely moves it";
+  const int samples = room.Base(1)->levelSamples;
+  for (double u = t; u < t + 10; u += 0.01) room.Advance(u), room.RefineOriginTilt(1, {0.2, 0}, 0.01, u);
+  EXPECT_EQ(room.Base(1)->levelSamples, samples) << "an unconverged estimate (6 deg sigma) isn't taken";
+
+  // A stored room keeps its count: settled at once.
+  const std::string path = ::testing::TempDir() + "level_settled_room.json";
+  {
+    std::ofstream f(path);
+    f << R"({"rooms": [{"id": "room-1", "source": "lh", "updated": 1, "bases": [{"serial": 1, "pose": {"position": [0, 0, 0],
+        "orientation": [1, 0, 0, 0]}, "rotationVariance": 1e-6, "origin": true, "levelSamples": 120}]}]})";
+  }
   RoomMap stored;
+  ASSERT_TRUE(stored.Load(path));
   stored.OnBaseSeen(Config(1), {});
-  ASSERT_TRUE(stored.EstablishOrigin(1, {0.0, 0.0}, 3e-7));   // as a saved room's origin
+  ASSERT_NE(stored.Base(1), nullptr);
+  EXPECT_EQ(stored.Base(1)->levelSamples, 120);
   EXPECT_TRUE(stored.LevelSettled());
 
   // A room from SteamVR's database: its heading, origin and floor, but its level is the stock
@@ -586,7 +606,7 @@ TEST(RoomMap, LevelSettlesOnceItStopsChanging) {
   EXPECT_FALSE(imported.LevelSettled());
   for (; t < 103; t += 0.01) { imported.Advance(t); imported.RefineOriginTilt(1, {0.0, 0}, 1e-6, t); }
   EXPECT_GT(Eigen::AngleAxisd(imported.Base(1)->worldFromBase.rotation()).angle(), 0.0) << "levelled by the devices";
-  for (; t < 164; t += 0.01) imported.Advance(t);
+  for (; t < 175; t += 0.01) { imported.Advance(t); imported.RefineOriginTilt(1, {0.0, 0}, 1e-6, t); }
   EXPECT_TRUE(imported.LevelSettled());
 }
 
