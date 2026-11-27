@@ -24,6 +24,7 @@ struct Shortcut {
 std::string InstallShortcuts(const std::vector<Shortcut>& shortcuts);
 void RemoveShortcuts();
 fs::path ShortcutFile(const std::string& id);  // Linux: where the entry with that id is written
+fs::path OldShortcutFile(const std::string& id);  // Linux: where it was written before 1.0.5 (openhouse-<id>.desktop)
 
 // openhouse:// links open `installer --url <link>`: SteamVR's firmware "Update" button on a device
 // opens openhouse://update-dongles (the driver sets it), which starts the Doorman updater.

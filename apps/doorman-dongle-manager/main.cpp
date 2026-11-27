@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "common/crash_log.hpp"
+#include "common/desktop_identity.hpp"
 #include "common/ui_scale.hpp"
 #include "dongle_logo_rgba.h"
 #include "logo_rgba.h"
@@ -62,6 +63,7 @@ int main() {
   const bool snapshot = std::getenv("OPENHOUSE_DONGLE_SNAPSHOT") != nullptr;
   lh::ui::ScaleChoice scaleChoice = lh::ui::LoadScaleChoice();
   float activeScale = lh::ui::ResolveScale(scaleChoice, kBaseW, kBaseH, "OPENHOUSE_DONGLE_SCALE", snapshot);
+  lh::ui::DesktopIdentity("doorman-dongle-manager", "dongle-manager.png", "Doorman Dongle Manager");   // Wayland: the icon comes from the menu entry of that name
   GLFWwindow* window = lh::ui::CreateFixedAspectWindow(kBaseW, kBaseH, activeScale, "Doorman Dongle Manager");
   if (!window) { std::fprintf(stderr, "doorman-dongle-manager: can't open a window\n"); glfwTerminate(); return 1; }
   bool scaleDirty = false, scaleSave = false;
