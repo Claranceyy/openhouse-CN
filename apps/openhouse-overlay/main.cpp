@@ -25,6 +25,7 @@
 #include <optional>
 #include <thread>
 #include "common/crash_log.hpp"
+#include "common/ui_scale.hpp"
 #include "driver_check.hpp"
 #include <cstdlib>
 #include <vector>
@@ -90,22 +91,35 @@ GLuint UploadRgba(const uint8_t* rgba, int w, int h) {
 
 // ---- the desktop window ----
 int RunDesktop() {
-  // OPENHOUSE_OVERLAY_SCALE=2 (testing): the window drawn as the VR overlay is, at its size.
-  const char* scaleEnv = std::getenv("OPENHOUSE_OVERLAY_SCALE");
-  const int scale = scaleEnv && std::atoi(scaleEnv) > 1 ? std::atoi(scaleEnv) : 1;
-  GLFWwindow* window = scale > 1 ? glfwCreateWindow(kTextureWidth, kTextureHeight, "openhouse", nullptr, nullptr)
-                                 : glfwCreateWindow(1280, 800, "openhouse", nullptr, nullptr);
+  constexpr int kBaseW = 1280, kBaseH = 800;
+  const bool snapshot = std::getenv("OPENHOUSE_OVERLAY_SNAPSHOT") != nullptr;
+  lh::ui::ScaleChoice scaleChoice = lh::ui::LoadScaleChoice();
+  float activeScale = lh::ui::ResolveScale(scaleChoice, kBaseW, kBaseH, "OPENHOUSE_OVERLAY_SCALE", snapshot);
+  GLFWwindow* window = lh::ui::CreateFixedAspectWindow(kBaseW, kBaseH, activeScale, "openhouse");
   if (!window) { std::fprintf(stderr, "openhouse-overlay: can't open a window\n"); return 1; }
+  bool scaleDirty = false, scaleSave = false;
+  glfwSetWindowUserPointer(window, &scaleDirty);
+  glfwSetWindowContentScaleCallback(window, [](GLFWwindow* w, float, float) {
+    if (auto* dirty = static_cast<bool*>(glfwGetWindowUserPointer(w))) *dirty = true;
+  });
   glfwMakeContextCurrent(window);
   glfwSwapInterval(1);
   GLFWimage icon{kLogoSize, kLogoSize, const_cast<unsigned char*>(kLogoRgba)};
   glfwSetWindowIcon(window, 1, &icon);
   ImGui::CreateContext();
-  Ui::SetUpImGui(scale);
+  Ui::SetUpImGui(activeScale);
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL2_Init();
   Ui ui(TelemetryPort());
   ui.SetLogo(UploadRgba(kLogoRgba, kLogoSize, kLogoSize));
+  if (!snapshot) {
+    ui.SetScaleDrawer([&] {
+      if (lh::ui::DrawScaleCombo("##scale", scaleChoice, activeScale, kBaseW, kBaseH, window)) {
+        scaleDirty = true;
+        scaleSave = true;
+      }
+    });
+  }
   double next = glfwGetTime();
   int frame = 0;
   while (!glfwWindowShouldClose(window) && !ui.QuitRequested()) {
@@ -121,10 +135,27 @@ int RunDesktop() {
     if (wait > 0) glfwWaitEventsTimeout(wait);
     else glfwPollEvents();
     next = glfwGetTime();
+    if (scaleDirty && !snapshot) {
+      scaleDirty = false;
+      const float nextScale = lh::ui::ResolveScale(scaleChoice, kBaseW, kBaseH, "OPENHOUSE_OVERLAY_SCALE", false, window);
+      if (std::fabs(nextScale - activeScale) > 0.001f) {
+        activeScale = nextScale;
+        lh::ui::ApplyWindowScale(window, kBaseW, kBaseH, activeScale);
+        Ui::SetUpImGui(activeScale);
+      }
+      if (scaleSave) {
+        lh::ui::SaveScaleChoice(scaleChoice);
+        scaleSave = false;
+      }
+    }
     ui.Poll(glfwGetTime());
     ImGui_ImplOpenGL2_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
+    if (!snapshot && lh::ui::HandleScaleShortcuts(scaleChoice, activeScale, kBaseW, kBaseH, window)) {
+      scaleDirty = true;
+      scaleSave = true;
+    }
     ui.Draw(ImGui::GetIO().DisplaySize.x, ImGui::GetIO().DisplaySize.y);
     ImGui::Render();
     int w, h;

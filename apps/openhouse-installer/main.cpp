@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "common/crash_log.hpp"
+#include "common/ui_scale.hpp"
 #include "logo_rgba.h"
 #include "ui.hpp"
 
@@ -46,19 +47,36 @@ int Run(const std::string& mode) {
 #endif
     return 1;
   }
-  GLFWwindow* window = glfwCreateWindow(1000, 720, "openhouse installer", nullptr, nullptr);
+  constexpr int kBaseW = 1000, kBaseH = 720;
+  const char* snapshot = std::getenv("OPENHOUSE_INSTALLER_SNAPSHOT");
+  lh::ui::ScaleChoice scaleChoice = lh::ui::LoadScaleChoice();
+  float activeScale = lh::ui::ResolveScale(scaleChoice, kBaseW, kBaseH, nullptr, snapshot != nullptr);
+  GLFWwindow* window = lh::ui::CreateFixedAspectWindow(kBaseW, kBaseH, activeScale, "openhouse installer");
   if (!window) { glfwTerminate(); return 1; }
+  bool scaleDirty = false, scaleSave = false;
+  glfwSetWindowUserPointer(window, &scaleDirty);
+  glfwSetWindowContentScaleCallback(window, [](GLFWwindow* w, float, float) {
+    if (auto* dirty = static_cast<bool*>(glfwGetWindowUserPointer(w))) *dirty = true;
+  });
   glfwMakeContextCurrent(window);
   glfwSwapInterval(1);
   GLFWimage icon{openhouse::overlay::kLogoSize, openhouse::overlay::kLogoSize, const_cast<unsigned char*>(openhouse::overlay::kLogoRgba)};
   glfwSetWindowIcon(window, 1, &icon);
   ImGui::CreateContext();
-  Ui::SetUpImGui();
+  Ui::SetUpImGui(activeScale);
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL2_Init();
   {
     Ui ui;
     ui.SetLogo(UploadRgba(openhouse::overlay::kLogoRgba, openhouse::overlay::kLogoSize, openhouse::overlay::kLogoSize));
+    if (!snapshot) {
+      ui.SetScaleDrawer([&] {
+        if (lh::ui::DrawScaleCombo("##scale", scaleChoice, activeScale, kBaseW, kBaseH, window)) {
+          scaleDirty = true;
+          scaleSave = true;
+        }
+      });
+    }
     // Testing without a screen: OPENHOUSE_INSTALLER_PAGE picks the page, OPENHOUSE_INSTALLER_SNAPSHOT=FILE.ppm
     // writes the frame drawn after ~2 s and exits.
     if (const char* page = std::getenv("OPENHOUSE_INSTALLER_PAGE")) ui.ShowForTest(page);
@@ -66,13 +84,29 @@ int Run(const std::string& mode) {
     else if (mode == "--install" || mode == "--repair") ui.StartAutoInstall();
     else if (mode == "--uninstall") ui.StartAutoUninstall();
     else if (mode == "--dongles") ui.StartDongleUpdate();
-    const char* snapshot = std::getenv("OPENHOUSE_INSTALLER_SNAPSHOT");
     int frame = 0;
     while (!glfwWindowShouldClose(window) && !ui.QuitRequested()) {
       glfwWaitEventsTimeout(1.0 / 30);  // keeps redrawing for progress bars and device lists
+      if (scaleDirty && !snapshot) {
+        scaleDirty = false;
+        const float nextScale = lh::ui::ResolveScale(scaleChoice, kBaseW, kBaseH, nullptr, false, window);
+        if (std::fabs(nextScale - activeScale) > 0.001f) {
+          activeScale = nextScale;
+          lh::ui::ApplyWindowScale(window, kBaseW, kBaseH, activeScale);
+          Ui::SetUpImGui(activeScale);
+        }
+        if (scaleSave) {
+          lh::ui::SaveScaleChoice(scaleChoice);
+          scaleSave = false;
+        }
+      }
       ImGui_ImplOpenGL2_NewFrame();
       ImGui_ImplGlfw_NewFrame();
       ImGui::NewFrame();
+      if (!snapshot && lh::ui::HandleScaleShortcuts(scaleChoice, activeScale, kBaseW, kBaseH, window)) {
+        scaleDirty = true;
+        scaleSave = true;
+      }
       ui.Draw(ImGui::GetIO().DisplaySize.x, ImGui::GetIO().DisplaySize.y);
       ImGui::Render();
       int w, h;

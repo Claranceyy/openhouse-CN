@@ -23,6 +23,7 @@
 #include "platform/platform.hpp"
 #include "common/crash_log.hpp"
 #include "common/ui_name_fonts.hpp"
+#include "common/ui_scale.hpp"
 #include "lh/bug_report.hpp"
 #include "lh/telemetry.hpp"
 #include "log_view.hpp"
@@ -118,6 +119,34 @@ void Section(const char* title) {
   ImGui::Spacing();
   ImGui::SeparatorText(title);
 }
+void ApplyViewerImGui(float k) {
+  ImGuiIO& io = ImGui::GetIO();
+  io.IniFilename = nullptr;  // our own settings file; the layout is fixed
+  static ImFont *bodyBmp = nullptr, *bodyVec = nullptr;
+  if (io.Fonts->Fonts.empty()) {
+    ImFontConfig bmp;
+    bmp.OversampleH = bmp.OversampleV = 1;
+    bmp.PixelSnapH = true;
+    bmp.SizePixels = 13.f;
+    bodyBmp = io.Fonts->AddFontDefaultBitmap(&bmp);
+    lh::ui::MergeTrackerNameFonts(*io.Fonts);
+
+    ImFontConfig vec;
+    vec.PixelSnapH = true;
+    vec.SizePixels = 13.f;
+    bodyVec = io.Fonts->AddFontDefaultVector(&vec);
+    lh::ui::MergeTrackerNameFonts(*io.Fonts);
+  }
+  const bool integerScale = std::fabs(k - std::round(k)) < 0.01f;
+  io.FontDefault = integerScale ? bodyBmp : bodyVec;
+  ImGui::GetStyle() = ImGuiStyle();
+  ImGui::StyleColorsDark();
+  ImGuiStyle& style = ImGui::GetStyle();
+  style.WindowRounding = 0;
+  style.FrameRounding = 3;
+  style.ScaleAllSizes(k);
+  style.FontScaleMain = k;
+}
 }  // namespace
 
 int main() {
@@ -126,19 +155,21 @@ int main() {
     std::fprintf(stderr, "openhouse-viewer: no display\n");
     return 1;
   }
-  GLFWwindow* window = glfwCreateWindow(1280, 820, "openhouse viewer", nullptr, nullptr);
+  constexpr int kBaseW = 1280, kBaseH = 820;
+  lh::ui::ScaleChoice scaleChoice = lh::ui::LoadScaleChoice();
+  float activeScale = lh::ui::ResolveScale(scaleChoice, kBaseW, kBaseH);
+  GLFWwindow* window = lh::ui::CreateFixedAspectWindow(kBaseW, kBaseH, activeScale, "openhouse viewer");
   if (!window) return 1;
+  bool scaleDirty = false, scaleSave = false;
+  glfwSetWindowUserPointer(window, &scaleDirty);
+  glfwSetWindowContentScaleCallback(window, [](GLFWwindow* w, float, float) {
+    if (auto* dirty = static_cast<bool*>(glfwGetWindowUserPointer(w))) *dirty = true;
+  });
   glfwMakeContextCurrent(window);
   glfwSwapInterval(1);
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
-  ImGuiIO& io = ImGui::GetIO();
-  io.IniFilename = nullptr;  // our own settings file; the layout is fixed
-  io.Fonts->AddFontDefault();
-  lh::ui::MergeTrackerNameFonts(*io.Fonts);
-  ImGui::StyleColorsDark();
-  ImGui::GetStyle().WindowRounding = 0;
-  ImGui::GetStyle().FrameRounding = 3;
+  ApplyViewerImGui(activeScale);
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL2_Init();
 
@@ -167,10 +198,27 @@ int main() {
     if (wait > 0) std::this_thread::sleep_for(std::chrono::duration<double>(wait));
     nextFrame = glfwGetTime();
     glfwPollEvents();
+    if (scaleDirty) {
+      scaleDirty = false;
+      const float nextScale = lh::ui::ResolveScale(scaleChoice, kBaseW, kBaseH, nullptr, false, window);
+      if (std::fabs(nextScale - activeScale) > 0.001f) {
+        activeScale = nextScale;
+        lh::ui::ApplyWindowScale(window, kBaseW, kBaseH, activeScale);
+        ApplyViewerImGui(activeScale);
+      }
+      if (scaleSave) {
+        lh::ui::SaveScaleChoice(scaleChoice);
+        scaleSave = false;
+      }
+    }
     client.Poll(glfwGetTime());
     ImGui_ImplOpenGL2_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
+    if (lh::ui::HandleScaleShortcuts(scaleChoice, activeScale, kBaseW, kBaseH, window)) {
+      scaleDirty = true;
+      scaleSave = true;
+    }
 
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->WorkPos);
@@ -182,6 +230,14 @@ int main() {
       if (ImGui::BeginMenu("View")) {
         if (ImGui::MenuItem("Basic", nullptr, settings.detail == Detail::Basic)) settings.detail = Detail::Basic;
         if (ImGui::MenuItem("Advanced", nullptr, settings.detail == Detail::Advanced)) settings.detail = Detail::Advanced;
+        ImGui::Separator();
+        if (ImGui::BeginMenu("Scale")) {
+          if (lh::ui::DrawScaleMenuItems(scaleChoice, kBaseW, kBaseH, window)) {
+            scaleDirty = true;
+            scaleSave = true;
+          }
+          ImGui::EndMenu();
+        }
         ImGui::EndMenu();
       }
       if (ImGui::BeginMenu("Logs")) {
