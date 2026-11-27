@@ -604,6 +604,9 @@ install(EXPORT lighthouseTargets NAMESPACE lh:: DESTINATION ${CMAKE_INSTALL_LIBD
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/lighthouseConfig.cmake
   ${CMAKE_CURRENT_BINARY_DIR}/lighthouseConfigVersion.cmake DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/lighthouse)
 
+# Chinese (zh_CN) non-invasive i18n overlay
+include(i18n/i18n.cmake)
+
 # Everything built here waits for the version stamp (lh/build_id.h).
 get_property(lh_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
 foreach(t IN LISTS lh_targets)

@@ -37,6 +37,9 @@
 #include "logo_rgba.h"
 #include "openvr_runtime.hpp"
 #include "ui.hpp"
+#ifdef OPENHOUSE_I18N
+#include "i18n.hpp"
+#endif
 
 #ifdef _WIN32
 #include <windows.h>
@@ -238,9 +241,16 @@ int RunOverlay() {
   Ui ui(TelemetryPort());
   ui.SetInVR(true);
   ui.SetNameKeyboard([&](const char* current, uint64_t edit) {
+#ifdef OPENHOUSE_I18N
+    const std::string title = lh::i18n::Translate("Tracker name");
+    return overlay->ShowKeyboardForOverlay(main, vr::k_EGamepadTextInputModeNormal, vr::k_EGamepadTextInputLineModeSingleLine,
+                                           vr::KeyboardFlag_Modal, title.c_str(), kTrackerKeyboardMaxChars,
+                                           current, edit) == vr::VROverlayError_None;
+#else
     return overlay->ShowKeyboardForOverlay(main, vr::k_EGamepadTextInputModeNormal, vr::k_EGamepadTextInputLineModeSingleLine,
                                            vr::KeyboardFlag_Modal, "Tracker name", kTrackerKeyboardMaxChars,
                                            current, edit) == vr::VROverlayError_None;
+#endif
   });
   ui.SetLogo(UploadRgba(kLogoRgba, kLogoSize, kLogoSize));
 
@@ -255,7 +265,12 @@ int RunOverlay() {
       notified = openhouse::overlay::Notice().generation;
       if (vr::IVRNotifications* n = vr::VRNotifications()) {
         const bool replaced = openhouse::overlay::Notice().kind == openhouse::overlay::NoticeKind::Replaced;
-        const std::string text = openhouse::overlay::NoticeText() + (replaced ? ". Open openhouse in the dashboard to reinstall" : "");
+        const std::string rawText = openhouse::overlay::NoticeText() + (replaced ? ". Open openhouse in the dashboard to reinstall" : "");
+#ifdef OPENHOUSE_I18N
+        const std::string text = lh::i18n::Translate(rawText);
+#else
+        const std::string& text = rawText;
+#endif
         vr::NotificationBitmap_t logo;
         logo.m_pImageData = const_cast<uint8_t*>(kLogoRgba);
         logo.m_nWidth = kLogoSize;

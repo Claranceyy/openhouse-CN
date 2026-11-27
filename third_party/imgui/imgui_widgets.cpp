@@ -46,6 +46,9 @@ Index of this file:
 
 // System includes
 #include <stdint.h>     // intptr_t
+#ifdef OPENHOUSE_I18N
+#include "i18n.hpp"
+#endif
 
 //-------------------------------------------------------------------------
 // Warnings
@@ -288,6 +291,9 @@ void ImGui::TextV(const char* fmt, va_list args)
         return;
 
     const char* text, *text_end;
+#ifdef OPENHOUSE_I18N
+    fmt = lh::i18n::TranslateFormat(fmt);
+#endif
     ImFormatStringToTempBufferV(&text, &text_end, fmt, args);
     TextEx(text, text_end, ImGuiTextFlags_NoWidthForLargeClippedText);
 }
@@ -360,6 +366,9 @@ void ImGui::TextAlignedV(float align_x, float size_x, const char* fmt, va_list a
         return;
 
     const char* text, *text_end;
+#ifdef OPENHOUSE_I18N
+    fmt = lh::i18n::TranslateFormat(fmt);
+#endif
     ImFormatStringToTempBufferV(&text, &text_end, fmt, args);
     const ImVec2 text_size = CalcTextSize(text, text_end);
     size_x = CalcItemSize(ImVec2(size_x, 0.0f), 0.0f, text_size.y).x;
@@ -402,6 +411,9 @@ void ImGui::LabelTextV(const char* label, const char* fmt, va_list args)
     const float w = CalcItemWidth();
 
     const char* value_text_begin, *value_text_end;
+#ifdef OPENHOUSE_I18N
+    fmt = lh::i18n::TranslateFormat(fmt);
+#endif
     ImFormatStringToTempBufferV(&value_text_begin, &value_text_end, fmt, args);
     const ImVec2 value_size = CalcTextSize(value_text_begin, value_text_end, false);
     const char* label_end = FindRenderedTextEnd(label);
@@ -439,6 +451,9 @@ void ImGui::BulletTextV(const char* fmt, va_list args)
     const ImGuiStyle& style = g.Style;
 
     const char* text_begin, *text_end;
+#ifdef OPENHOUSE_I18N
+    fmt = lh::i18n::TranslateFormat(fmt);
+#endif
     ImFormatStringToTempBufferV(&text_begin, &text_end, fmt, args);
     const ImVec2 label_size = CalcTextSize(text_begin, text_end, false);
     const ImVec2 total_size = ImVec2(g.FontSize + (label_size.x > 0.0f ? (label_size.x + style.FramePadding.x * 2) : 0.0f), label_size.y);  // Empty text doesn't add padding

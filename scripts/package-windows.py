@@ -46,6 +46,8 @@ for notice in (repo / 'third_party/lighthouse-ble').glob('*.txt'):
 # Built with MSVC (VCRUNTIME140, which SteamVR installs); without it the overlay just can't change channels.
 subprocess.run([sys.executable, str(repo / 'scripts/fetch-lighthouse-ble.py'), 'windows', str(out / 'apps')], check=True, stdout=subprocess.DEVNULL)
 shutil.copy2(repo / 'LICENSE', out / 'LICENSE.txt')
+if (repo / 'i18n/zh_CN.json').is_file():
+    shutil.copy2(repo / 'i18n/zh_CN.json', out / 'zh_CN.json')
 if not (build / 'VERSION.txt').is_file():
     sys.exit(f'Missing build artifact: {build / "VERSION.txt"}')
 shutil.copy2(build / 'VERSION.txt', out / 'VERSION.txt')   # the build's version (cmake/build_id.cmake)

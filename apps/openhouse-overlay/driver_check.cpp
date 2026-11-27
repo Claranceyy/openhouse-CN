@@ -5,6 +5,9 @@
 #include <lh/github.hpp>
 #include <lh/telemetry.hpp>
 #include <lh/version.hpp>
+#ifdef OPENHOUSE_I18N
+#include "i18n.hpp"
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -226,6 +229,30 @@ LRESULT CALLBACK RenameButtons(int code, WPARAM wParam, LPARAM lParam) {
 // 0: the first button, 1: the middle one (when given), 2: cancel. In front of everything, a warning
 // icon, no sound (the icon is the box's own, which plays none).
 int Ask(const std::string& text, const wchar_t* first, const wchar_t* second, const wchar_t* cancel) {
+#ifdef OPENHOUSE_I18N
+  auto tr_wide = [](const wchar_t* w) -> std::wstring {
+    if (!w) return {};
+    std::string ascii;
+    for (const wchar_t* p = w; *p; ++p) ascii.push_back(static_cast<char>(*p));
+    return lh::i18n::Utf8ToWide(lh::i18n::Translate(ascii));
+  };
+  const std::wstring w_first = tr_wide(first);
+  const std::wstring w_second = tr_wide(second);
+  const std::wstring w_cancel = tr_wide(cancel);
+  const std::wstring w_text = lh::i18n::Utf8ToWide(lh::i18n::Translate(text));
+  const std::wstring w_title = lh::i18n::Utf8ToWide(lh::i18n::Translate(kTitle));
+  g_first = w_first.c_str();
+  g_second = second ? w_second.c_str() : nullptr;
+  g_cancel = w_cancel.c_str();
+  g_hook = SetWindowsHookExW(WH_CBT, RenameButtons, nullptr, GetCurrentThreadId());
+  MSGBOXPARAMSW box{sizeof box};
+  box.lpszText = w_text.c_str();
+  box.lpszCaption = w_title.c_str();
+  box.dwStyle = (second ? MB_YESNOCANCEL : MB_OKCANCEL) | MB_USERICON | MB_TOPMOST | MB_SETFOREGROUND;
+  box.lpszIcon = MAKEINTRESOURCEW(32515);  // IDI_WARNING, from the system (hInstance null)
+  const int r = MessageBoxIndirectW(&box);
+  return r == IDOK || r == IDYES ? 0 : r == IDNO ? 1 : 2;
+#else
   g_first = first;
   g_second = second;
   g_cancel = cancel;
@@ -237,6 +264,7 @@ int Ask(const std::string& text, const wchar_t* first, const wchar_t* second, co
   box.lpszIcon = MAKEINTRESOURCEA(32515);  // IDI_WARNING, from the system (hInstance null)
   const int r = MessageBoxIndirectA(&box);
   return r == IDOK || r == IDYES ? 0 : r == IDNO ? 1 : 2;
+#endif
 }
 NoticeAction AskUser(const NoticeState& n) {
   if (n.kind != NoticeKind::Replaced) return Ask(DialogText(n), L"Update", nullptr, L"Ignore") == 0 ? NoticeAction::Update : NoticeAction::Ignore;
@@ -266,20 +294,32 @@ bool Have(const char* tool) { return std::system((std::string("command -v ") + t
 // 0: the first button, 1: the middle one (when given), 2: cancel. zenity, else kdialog, else a
 // notification (and 2).
 int Ask(const std::string& text, const std::string& first, const std::string& second, const std::string& cancel) {
+#ifdef OPENHOUSE_I18N
+  const std::string text_tr = lh::i18n::Translate(text);
+  const std::string first_tr = lh::i18n::Translate(first);
+  const std::string second_tr = second.empty() ? std::string() : lh::i18n::Translate(second);
+  const std::string cancel_tr = lh::i18n::Translate(cancel);
+  const std::string t = Quoted(lh::i18n::Translate(kTitle)), m = Quoted(text_tr), env = DesktopEnv();
+#else
+  const std::string& text_tr = text;
+  const std::string& first_tr = first;
+  const std::string& second_tr = second;
+  const std::string& cancel_tr = cancel;
   const std::string t = Quoted(kTitle), m = Quoted(text), env = DesktopEnv();
+#endif
   if (Have("zenity")) {
     const auto shownAt = std::chrono::steady_clock::now();
     // The OK button exits 0; cancel and Esc 1; the extra button exits 1 and prints its label.
     const std::string command = env + "zenity --question --icon=dialog-warning --width=440 --title=" + t + " --text=" + m +
-                                " --ok-label=" + Quoted(first) + " --cancel-label=" + Quoted(cancel) +
-                                (second.empty() ? "" : " --extra-button=" + Quoted(second)) + " 2>/dev/null";
+                                " --ok-label=" + Quoted(first_tr) + " --cancel-label=" + Quoted(cancel_tr) +
+                                (second_tr.empty() ? "" : " --extra-button=" + Quoted(second_tr)) + " 2>/dev/null";
     if (FILE* pipe = popen(command.c_str(), "r")) {
       char out[128]{};
       const size_t got = std::fread(out, 1, sizeof out - 1, pipe);
       out[got] = 0;
       const int rc = pclose(pipe);
       Log("zenity exited with " + std::to_string(rc));
-      if (!second.empty() && std::strstr(out, second.c_str())) return 1;
+      if (!second_tr.empty() && std::strstr(out, second_tr.c_str())) return 1;
       if (WIFEXITED(rc) && WEXITSTATUS(rc) == 0) return 0;
       // A quick exit 1: no display, the next tool's turn.
       if (std::chrono::steady_clock::now() - shownAt > std::chrono::seconds(1)) return 2;
@@ -288,18 +328,18 @@ int Ask(const std::string& text, const std::string& first, const std::string& se
   if (Have("kdialog")) {
     const auto shownAt = std::chrono::steady_clock::now();
     const std::string command = env + "kdialog --title " + t +
-                                (second.empty() ? " --warningyesno " + m + " --yes-label " + Quoted(first) + " --no-label " + Quoted(cancel)
-                                                : " --warningyesnocancel " + m + " --yes-label " + Quoted(first) + " --no-label " +
-                                                      Quoted(second) + " --cancel-label " + Quoted(cancel)) +
+                                (second_tr.empty() ? " --warningyesno " + m + " --yes-label " + Quoted(first_tr) + " --no-label " + Quoted(cancel_tr)
+                                                   : " --warningyesnocancel " + m + " --yes-label " + Quoted(first_tr) + " --no-label " +
+                                                         Quoted(second_tr) + " --cancel-label " + Quoted(cancel_tr)) +
                                 " >/dev/null 2>&1";
     const int rc = std::system(command.c_str());
     Log("kdialog exited with " + std::to_string(rc));
     const int code = WIFEXITED(rc) ? WEXITSTATUS(rc) : -1;
     if (code == 0) return 0;
-    if (code == 1 && !second.empty()) return 1;
+    if (code == 1 && !second_tr.empty()) return 1;
     if (code == 1 || code == 2 || std::chrono::steady_clock::now() - shownAt > std::chrono::seconds(1)) return 2;
   }
-  const std::string note = text + "\n" + kReleases;
+  const std::string note = text_tr + "\n" + kReleases;
   if (!Have("notify-send") || std::system((env + "notify-send -u critical " + t + " " + Quoted(note) + " >/dev/null 2>&1").c_str()) != 0)
     std::fprintf(stderr, "%s: %s\n", kTitle, note.c_str());
   Log("no dialog tool: notification only");

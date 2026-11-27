@@ -42,6 +42,9 @@ Index of this file:
 
 #include <stdio.h>      // vsnprintf, sscanf, printf
 #include <stdint.h>     // intptr_t
+#ifdef OPENHOUSE_I18N
+#include "i18n.hpp"
+#endif
 
 // Visual Studio warnings
 #ifdef _MSC_VER
@@ -1732,6 +1735,14 @@ void ImDrawList::AddText(ImFont* font, float font_size, const ImVec2& pos, ImU32
     // Accept null ranges
     if (text_begin == text_end || text_begin[0] == 0)
         return;
+#ifdef OPENHOUSE_I18N
+    if (!lh::i18n::InBypass())
+    {
+        const std::string_view tr = lh::i18n::TranslateSpan(text_begin, text_end);
+        text_begin = tr.data();
+        text_end = tr.data() + tr.size();
+    }
+#endif
     // No need to strlen() here: font->RenderText() will do it and may early out.
 
     // Pull default font/size from the shared ImDrawListSharedData instance
@@ -3174,10 +3185,14 @@ static float GetExpectedContextFontSize(ImGuiContext* ctx)
 // Prefer calling AddFontDefaultVector() or AddFontDefaultBitmap() based on your own logic.
 ImFont* ImFontAtlas::AddFontDefault(const ImFontConfig* font_cfg)
 {
-    if (OwnerContext == NULL || GetExpectedContextFontSize(OwnerContext) >= 15.0f)
-        return AddFontDefaultVector(font_cfg);
-    else
-        return AddFontDefaultBitmap(font_cfg);
+    ImFont* font = (OwnerContext == NULL || GetExpectedContextFontSize(OwnerContext) >= 15.0f)
+        ? AddFontDefaultVector(font_cfg)
+        : AddFontDefaultBitmap(font_cfg);
+#ifdef OPENHOUSE_I18N
+    if (font != NULL)
+        lh::i18n::MergeCjkFallbackFont(*this, font_cfg);
+#endif
+    return font;
 }
 
 // Load embedded ProggyClean.ttf. Default size 13, disable oversampling.
@@ -5755,6 +5770,14 @@ ImVec2 ImFontCalcTextSizeEx(ImFont* font, float size, float max_width, float wra
 
 ImVec2 ImFont::CalcTextSizeA(float size, float max_width, float wrap_width, const char* text_begin, const char* text_end, const char** out_remaining)
 {
+#ifdef OPENHOUSE_I18N
+    if (out_remaining == NULL && text_begin != NULL && text_begin != text_end && !lh::i18n::InBypass())
+    {
+        const std::string_view tr = lh::i18n::TranslateSpan(text_begin, text_end);
+        text_begin = tr.data();
+        text_end = tr.data() + tr.size();
+    }
+#endif
     return ImFontCalcTextSizeEx(this, size, max_width, wrap_width, text_begin, text_end, text_end, out_remaining, NULL, ImDrawTextFlags_None);
 }
 

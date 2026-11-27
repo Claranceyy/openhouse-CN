@@ -1243,6 +1243,9 @@ IMPLEMENTING SUPPORT for ImGuiBackendFlags_RendererHasTextures:
 // System includes
 #include <stdio.h>      // vsnprintf, sscanf, printf
 #include <stdint.h>     // intptr_t
+#ifdef OPENHOUSE_I18N
+#include "i18n.hpp"
+#endif
 
 // [Windows] On non-Visual Studio compilers, we default to IMGUI_DISABLE_WIN32_DEFAULT_IME_FUNCTIONS unless explicitly enabled
 #if defined(_WIN32) && !defined(_MSC_VER) && !defined(IMGUI_ENABLE_WIN32_DEFAULT_IME_FUNCTIONS) && !defined(IMGUI_DISABLE_WIN32_DEFAULT_IME_FUNCTIONS)
@@ -3873,6 +3876,12 @@ void ImGui::RenderText(ImVec2 pos, const char* text, const char* text_end, bool 
 
     if (text != text_display_end)
     {
+#ifdef OPENHOUSE_I18N
+        const std::string_view tr = lh::i18n::TranslateSpan(text, text_display_end);
+        text = tr.data();
+        text_display_end = tr.data() + tr.size();
+        lh::i18n::ScopedBypass i18n_bypass;
+#endif
         window->DrawList->AddText(g.Font, g.FontSize, pos, GetColorU32(ImGuiCol_Text), text, text_display_end);
         if (g.LogEnabled)
             LogRenderedText(&pos, text, text_display_end);
@@ -3889,6 +3898,12 @@ void ImGui::RenderTextWrapped(ImVec2 pos, const char* text, const char* text_end
 
     if (text != text_end)
     {
+#ifdef OPENHOUSE_I18N
+        const std::string_view tr = lh::i18n::TranslateSpan(text, text_end);
+        text = tr.data();
+        text_end = tr.data() + tr.size();
+        lh::i18n::ScopedBypass i18n_bypass;
+#endif
         window->DrawList->AddText(g.Font, g.FontSize, pos, GetColorU32(ImGuiCol_Text), text, text_end, wrap_width);
         if (g.LogEnabled)
             LogRenderedText(&pos, text, text_end);
@@ -3902,6 +3917,15 @@ void ImGui::RenderTextWrapped(ImVec2 pos, const char* text, const char* text_end
 // better advantage of the render function taking size into account for coarse clipping.
 void ImGui::RenderTextClippedEx(ImDrawList* draw_list, const ImVec2& pos_min, const ImVec2& pos_max, const char* text, const char* text_display_end, const ImVec2* text_size_if_known, const ImVec2& align, const ImRect* clip_rect)
 {
+#ifdef OPENHOUSE_I18N
+    if (text != text_display_end)
+    {
+        const std::string_view tr = lh::i18n::TranslateSpan(text, text_display_end);
+        text = tr.data();
+        text_display_end = tr.data() + tr.size();
+    }
+    lh::i18n::ScopedBypass i18n_bypass;
+#endif
     // Perform CPU side clipping for single clipped element to avoid using scissor state
     ImVec2 pos = pos_min;
     const ImVec2 text_size = text_size_if_known ? *text_size_if_known : CalcTextSize(text, text_display_end, false, 0.0f);
@@ -3952,6 +3976,15 @@ void ImGui::RenderTextEllipsis(ImDrawList* draw_list, const ImVec2& pos_min, con
     ImGuiContext& g = *GImGui;
     if (text_end_full == NULL)
         text_end_full = FindRenderedTextEnd(text);
+#ifdef OPENHOUSE_I18N
+    if (text != text_end_full)
+    {
+        const std::string_view tr = lh::i18n::TranslateSpan(text, text_end_full);
+        text = tr.data();
+        text_end_full = tr.data() + tr.size();
+    }
+    lh::i18n::ScopedBypass i18n_bypass;
+#endif
     const ImVec2 text_size = text_size_if_known ? *text_size_if_known : CalcTextSize(text, text_end_full, false, 0.0f);
 
     //draw_list->AddLineV(pos_max.x, pos_min.y - 4, pos_max.y + 6, IM_COL32(0, 0, 255, 255));
@@ -6200,6 +6233,12 @@ ImVec2 ImGui::CalcTextSize(const char* text, const char* text_end, bool hide_tex
     const float font_size = g.FontSize;
     if (text == text_display_end)
         return ImVec2(0.0f, font_size);
+#ifdef OPENHOUSE_I18N
+    const std::string_view tr = lh::i18n::TranslateSpan(text, text_display_end);
+    text = tr.data();
+    text_display_end = tr.data() + tr.size();
+    lh::i18n::ScopedBypass i18n_bypass;
+#endif
     ImVec2 text_size = font->CalcTextSizeA(font_size, FLT_MAX, wrap_width, text, text_display_end, NULL);
 
     // Round

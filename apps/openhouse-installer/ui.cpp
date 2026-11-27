@@ -22,6 +22,9 @@
 #include "common/ui_theme.hpp"
 #include "lh/github.hpp"
 #include "lh/version.hpp"
+#ifdef OPENHOUSE_I18N
+#include "i18n.hpp"
+#endif
 
 namespace openhouse::installer {
 namespace {
@@ -359,7 +362,12 @@ ImU32 TintColor(Tint t) {
 int WrapText(ImDrawList* dl, ImVec2 topLeft, float width, ImU32 col, const char* text, bool centred = true) {
   ImFont* f = ImGui::GetFont();
   const float size = ImGui::GetFontSize();
+#ifdef OPENHOUSE_I18N
+  const std::string all = lh::i18n::Translate(text);
+  lh::i18n::ScopedBypass i18n_bypass;
+#else
   const std::string all = text;
+#endif
   std::string line;
   float y = topLeft.y;
   int lines = 0;
@@ -372,6 +380,42 @@ int WrapText(ImDrawList* dl, ImVec2 topLeft, float width, ImU32 col, const char*
     ++lines;
     line.clear();
   };
+#ifdef OPENHOUSE_I18N
+  // UTF-8 aware wrapping: keep ASCII words intact, allow breaking between multi-byte CJK glyphs.
+  size_t i = 0;
+  bool pendingSpace = false;
+  while (i < all.size()) {
+    const unsigned char c = static_cast<unsigned char>(all[i]);
+    if (c == '\n') {
+      flush();
+      pendingSpace = false;
+      ++i;
+      continue;
+    }
+    if (c == ' ') {
+      pendingSpace = !line.empty();
+      ++i;
+      continue;
+    }
+    size_t j = i;
+    if (c >= 0x80) {
+      const size_t charLen = (c & 0xE0) == 0xC0 ? 2 : (c & 0xF0) == 0xE0 ? 3 : (c & 0xF8) == 0xF0 ? 4 : 1;
+      j = std::min(all.size(), i + charLen);
+    } else {
+      while (j < all.size() && static_cast<unsigned char>(all[j]) < 0x80 && all[j] != ' ' && all[j] != '\n') ++j;
+    }
+    const std::string token = all.substr(i, j - i);
+    const std::string next = line.empty() ? token : (pendingSpace ? line + " " + token : line + token);
+    if (!line.empty() && ImGui::CalcTextSize(next.c_str()).x > width) {
+      flush();
+      line = token;
+    } else {
+      line = next;
+    }
+    pendingSpace = false;
+    i = j;
+  }
+#else
   size_t i = 0;
   while (i <= all.size()) {
     size_t j = all.find_first_of(" \n", i);
@@ -383,6 +427,7 @@ int WrapText(ImDrawList* dl, ImVec2 topLeft, float width, ImU32 col, const char*
     if (j < all.size() && all[j] == '\n') flush();
     i = j + 1;
   }
+#endif
   if (!line.empty()) flush();
   return lines;
 }
