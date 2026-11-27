@@ -331,7 +331,20 @@ struct DeviceStatic {
   // in for the headset). As the stock driver (0x2e8120): a class it doesn't know is Invalid.
   bool hidden = false;
   bool tundraTracker = false;
+  // The serial SteamVR knows it by: its config's device_serial_number when that is the maker's own
+  // name, as SteamVR's driver registers it (Add); else `serial`. EOZ's gloves are found by theirs
+  // ("IMMRSV-GLV-LEFT"/"-RIGHT"): under the radio serial its driver couldn't tell the hands apart.
+  std::string hostSerial;
 };
+
+// A config's tracked_controller_role as SteamVR's role hint: "opt_out" too (a glove whose hand
+// another driver provides, as EOZ's), which read as no role let SteamVR give it a hand of its own.
+int RoleHint(const std::string& role) {
+  if (role == "left_hand") return TrackedControllerRole_LeftHand;
+  if (role == "right_hand") return TrackedControllerRole_RightHand;
+  if (role == "opt_out") return TrackedControllerRole_OptOut;
+  return TrackedControllerRole_Invalid;
+}
 
 // Opens openhouse-installer's Doorman updater: the installer registers the openhouse:// links.
 constexpr const char* kUpdateUrl = "openhouse://update-dongles";
@@ -624,7 +637,7 @@ class Device : public ITrackedDeviceServerDriver {
     auto* props = VRProperties();
     const PropertyContainerHandle_t c = container_;
     props->SetStringProperty(c, Prop_TrackingSystemName_String, "lighthouse");
-    props->SetStringProperty(c, Prop_SerialNumber_String, info_.serial.c_str());
+    props->SetStringProperty(c, Prop_SerialNumber_String, info_.hostSerial.empty() ? info_.serial.c_str() : info_.hostSerial.c_str());
     // Tells apps it's openhouse, not SteamVR's own driver (same tracking system name).
     props->SetStringProperty(c, Prop_DriverVersion_String, (std::string("openhouse ") + lh::kVersion).c_str());
     props->SetBoolProperty(c, Prop_WillDriftInYaw_Bool, false);
@@ -662,9 +675,7 @@ class Device : public ITrackedDeviceServerDriver {
                         (mapped_.controllerType.empty() ? std::string("controller") : mapped_.controllerType) + info_.serial;
           props->SetStringProperty(c, Prop_RegisteredDeviceType_String, registered.c_str());
           props->SetInt32Property(c, Prop_ControllerRoleHint_Int32,
-                                  left ? TrackedControllerRole_LeftHand
-                                       : info_.controllerRole == "right_hand" ? TrackedControllerRole_RightHand
-                                                                              : TrackedControllerRole_Invalid);
+                                  RoleHint(info_.controllerRole));
           props->SetInt32Property(c, Prop_DeviceClass_Int32, TrackedDeviceClass_Controller);
           props->SetInt32Property(c, Prop_ControllerHandSelectionPriority_Int32, NextHandPriority());
           lastUse_ = std::chrono::steady_clock::now();
@@ -686,9 +697,7 @@ class Device : public ITrackedDeviceServerDriver {
                                    info_.renderModel.empty() ? "vr_controller_vive_1_5" : info_.renderModel.c_str());
           props->SetStringProperty(c, Prop_RegisteredDeviceType_String, ("htc/vive_controller" + info_.serial).c_str());
           props->SetInt32Property(c, Prop_ControllerRoleHint_Int32,
-                                  left ? TrackedControllerRole_LeftHand
-                                       : info_.controllerRole == "right_hand" ? TrackedControllerRole_RightHand
-                                                                              : TrackedControllerRole_Invalid);
+                                  RoleHint(info_.controllerRole));
           props->SetInt32Property(c, Prop_DeviceClass_Int32, TrackedDeviceClass_Controller);
           props->SetInt32Property(c, Prop_ControllerHandSelectionPriority_Int32, NextHandPriority());
           lastUse_ = std::chrono::steady_clock::now();
@@ -719,9 +728,7 @@ class Device : public ITrackedDeviceServerDriver {
                                      : info_.renderModel.c_str());
         props->SetStringProperty(c, Prop_RegisteredDeviceType_String, ("valve/index_controller" + info_.serial).c_str());
         props->SetInt32Property(c, Prop_ControllerRoleHint_Int32,
-                                left ? TrackedControllerRole_LeftHand
-                                     : info_.controllerRole == "right_hand" ? TrackedControllerRole_RightHand
-                                                                            : TrackedControllerRole_Invalid);
+                                RoleHint(info_.controllerRole));
         props->SetInt32Property(c, Prop_DeviceClass_Int32, TrackedDeviceClass_Controller);
         // Two controllers for one hand: SteamVR's primary is the higher priority. The one
         // turned on last, then whichever is picked up and used (UpdateInputs).
@@ -1671,6 +1678,7 @@ class Provider : public IServerTrackedDeviceProvider {
       info.registeredType = d.info.registeredType;
       info.tundraTracker = d.info.IsTundraTracker();
       info.hidden = EqualsNoCase(d.info.deviceClass, "null");
+      info.hostSerial = HostSerial(d.info.serial, d.info.configSerial);
       Add(info, info.hidden ? TrackedDeviceClass_Invalid
                 : d.info.role == lh::DeviceRole::Controller ? TrackedDeviceClass_Controller
                                                             : TrackedDeviceClass_GenericTracker);
@@ -1691,15 +1699,27 @@ class Provider : public IServerTrackedDeviceProvider {
     }
   }
 
-  void Add(const DeviceStatic& info, ETrackedDeviceClass cls) {
+  // The config's own serial when it's a maker's name, not a Valve-style one ("LHR-"), and no other
+  // device has it; else the radio's.
+  std::string HostSerial(const std::string& serial, const std::string& configSerial) const {
+    if (configSerial.empty() || configSerial == serial || configSerial.rfind("LHR-", 0) == 0 || configSerial.rfind("LHB-", 0) == 0)
+      return serial;
+    for (const auto& [id, device] : devices_)
+      if (device->Info().hostSerial == configSerial) return serial;
+    return configSerial;
+  }
+
+  void Add(DeviceStatic info, ETrackedDeviceClass cls) {
+    if (info.hostSerial.empty()) info.hostSerial = info.serial;
     auto device = std::make_unique<Device>(info);
     Device* raw = device.get();
     devices_[info.serial] = std::move(device);
+    const std::string shown = info.hostSerial == info.serial ? info.serial : info.serial + " as " + info.hostSerial;
     // The host may call Activate() from inside this call (Monado does).
-    if (!VRServerDriverHost()->TrackedDeviceAdded(info.serial.c_str(), cls, raw->ForHost()))
-      Log("host declined " + info.serial + (cls == TrackedDeviceClass_TrackingReference ? " (base station)" : ""));
+    if (!VRServerDriverHost()->TrackedDeviceAdded(info.hostSerial.c_str(), cls, raw->ForHost()))
+      Log("host declined " + shown + (cls == TrackedDeviceClass_TrackingReference ? " (base station)" : ""));
     else
-      Log("registered " + info.serial + (info.hidden ? " (device_class null: hidden from SteamVR's device list)" : ""));
+      Log("registered " + shown + (info.hidden ? " (device_class null: hidden from SteamVR's device list)" : ""));
   }
 
   // SteamVR's base station power management asks the headset to switch the Bluetooth

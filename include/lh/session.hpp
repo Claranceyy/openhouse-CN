@@ -114,6 +114,7 @@ struct DeviceInfo {
   ControllerType controllerType = ControllerType::Index;  // Controller role only
   std::string model, manufacturer, renderModel, controllerRole;  // "left_hand"/"right_hand"
   std::string resourceRoot, inputProfile, registeredType;  // config resource_root, input_profile, registered_device_type
+  std::string configSerial;     // config device_serial_number ("IMMRSV-GLV-LEFT": a maker's own name)
   bool connected = false;
   bool enabled = true;          // disabled devices are listed but ignored entirely
   bool imuDisabled = false;     // optical-only tracking (settings.json disableImuDevices)

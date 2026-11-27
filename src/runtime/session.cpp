@@ -700,6 +700,7 @@ bool SessionImpl::SetUpDevice(const DeviceId& id, const std::string& config) {
     d.info.resourceRoot = j.value("resource_root", "");
     d.info.inputProfile = j.value("input_profile", "");
     d.info.registeredType = j.value("registered_device_type", "");
+    d.info.configSerial = j.value("device_serial_number", "");
     d.info.controllerRole = j.value("tracked_controller_role", "");
     if (const auto r = roles_.find(id); r != roles_.end() && d.info.role != DeviceRole::Hmd) {
       // settings.json "roles": the values of tracked_controller_role.
