@@ -1275,7 +1275,7 @@ void SessionImpl::ShareMultiLayout(const DeviceId& id, Device& d) {
 }
 
 void SessionImpl::TakeContradictions(const DeviceId& id, Device& d) {
-  constexpr double kWindow = 20, kCooldown = 60;  // s
+  constexpr double kWindow = 5, kCooldown = 60;  // s: in a burst (a wrong room), not now and then (fast motion)
   constexpr size_t kFromSeveral = 3, kFromOne = 6;
   for (const auto& [primary, alt] : d.tracker->TakeContradictions()) {
     const RoomBase* p = room_.Base(primary);
