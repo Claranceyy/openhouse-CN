@@ -15,7 +15,9 @@
 #endif
 #include <windows.h>
 #include <cfgmgr32.h>
+extern "C" {
 #include <hidsdi.h>
+}
 #include <setupapi.h>
 #endif
 
