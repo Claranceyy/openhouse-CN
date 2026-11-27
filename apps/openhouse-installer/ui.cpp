@@ -1725,8 +1725,27 @@ void Ui::DonglePage() {
                               {Icon::Dongle, "Kuroshin", "It needs to be put into DFU mode by opening the dongle and shorting two pins"},
                               {Icon::Headset, "Valve Index", "The headset's own radio. Index only", Tint::Yellow}},
                              ImGui::GetFontSize() * 15);
-      if (tile >= 0) watch(kBoards[tile]);
+      // The Index's radio is found by Valve's radio USB id, which other headsets' radios (Bigscreen
+      // Beyond) and Valve's own dongles share: another headset's radio can be picked. Accepted first.
+      if (tile == 4) {
+        confirmedIndex_ = false;
+        dongleStep_ = DongleStep::IndexWarning;
+      } else if (tile >= 0) {
+        watch(kBoards[tile]);
+      }
       Back(Page::DoormanMenu);
+      return;
+    }
+    case DongleStep::IndexWarning: {
+      Warning("ONLY for the Valve Index!",
+              "This is not fully tested and will probably brick any headset other than the Valve Index.\n"
+              "Do not use it if you are not certain you want to flash your Index, or if you use a wired headset other than the Index!");
+      ImGui::Spacing();
+      ImGui::Checkbox("I understand, this is a Valve Index", &confirmedIndex_);
+      ImGui::BeginDisabled(!confirmedIndex_);
+      if (BigButton("Continue", ImGui::GetFontSize() * 12)) WatchDongles(4);
+      ImGui::EndDisabled();
+      if (BackButton()) dongleStep_ = DongleStep::Board;
       return;
     }
     case DongleStep::Detect: {
@@ -1852,6 +1871,7 @@ void Ui::DonglePage() {
         // restore: SteamVR's stock radio firmware back on it.
         const auto ask = [this](const std::string& serial, std::function<bool()> enter, bool restore) {
           indexRestore_ = restore;
+          confirmedIndexFlash_ = false;
           indexFlash_ = [serial, enter, restore, steam = Utf8(steamvr_.root)](Job& j) {
             const std::string package = IndexRadioPackage(steam);
             const fs::path image = FirmwareFolder() / "dongle" / "doorman-index.bin";
@@ -1910,12 +1930,17 @@ void Ui::DonglePage() {
           if (indexRestore_)
             ImGui::TextUnformatted("The radio gets SteamVR's own firmware back. If something goes wrong, the headset has to be "
                                    "physically opened to fix it. Are you sure you want to continue?");
-          else
+          else {
+            ImGui::TextColored(kBad, "Not fully tested: it will probably brick any headset other than the Valve Index.");
             ImGui::TextUnformatted("Buying a dongle is recommended over this. If something goes wrong, the headset has to be physically "
                                    "opened to fix it. Are you sure you want to continue?");
+          }
           ImGui::PopTextWrapPos();
           ImGui::Spacing();
+          if (!indexRestore_) ImGui::Checkbox("I understand, flash my Valve Index", &confirmedIndexFlash_);
+          ImGui::BeginDisabled(!indexRestore_ && !confirmedIndexFlash_);
           if (BigButton("Continue", fs * 9)) { ImGui::CloseCurrentPopup(); start(indexFlash_); }
+          ImGui::EndDisabled();
           ImGui::SameLine();
           if (BigButton("Cancel", fs * 9)) ImGui::CloseCurrentPopup();
           ImGui::EndPopup();
