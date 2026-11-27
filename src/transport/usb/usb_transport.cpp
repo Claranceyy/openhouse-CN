@@ -115,7 +115,9 @@ void ReportDecoder::AddEndpoint(const EndpointInfo& e) {
   if (e.kind != EndpointKind::Buttons && (fresh || alone || !e.configJson.empty())) sink_->OnDeviceAttached(e.serial, e.configJson);
 }
 
-void ReportDecoder::ResetWireless(Ep& ep) {
+void ReportDecoder::ResetWireless(Ep& ep, bool sameDevice) {
+  const int optical = ep.wireless ? ep.wireless->KnownOpticalSub() : 0xff;
+  const int controller = ep.wireless ? ep.wireless->KnownControllerSub() : 0xff;
   if (ep.connected) sink_->OnDeviceDetached(ep.info.serial);
   auto dev = std::make_shared<DeviceState>();
   dev->id = ep.info.serial;
@@ -124,6 +126,7 @@ void ReportDecoder::ResetWireless(Ep& ep) {
   devices_[ep.info.serial] = dev;
   ep.wireless = std::make_unique<WirelessReportParser>(dev, sink_);
   if (ep.versioning) ep.wireless->SetPendingVersionRequest();
+  if (sameDevice) ep.wireless->SeedSubProtocols(optical, controller);
   ep.connected = false;
   ep.lastWirelessReport = 0;
   ++ep.generation;
@@ -143,7 +146,7 @@ void ReportDecoder::OnReport(double hostTime, uint16_t epId, bool last, const ui
     if (data[0] != 0x23 && data[0] != 0x24) return;
     // Some receivers miss the off notification. A radio data gap is an epoch
     // boundary: discard protocol substate, IMU dedup timestamps and clock fit.
-    if (ep.lastWirelessReport && hostTime - ep.lastWirelessReport > kRadioGap) ResetWireless(ep);
+    if (ep.lastWirelessReport && hostTime - ep.lastWirelessReport > kRadioGap) ResetWireless(ep, true);
     if (!ep.connected) {
       sink_->OnDeviceAttached(ep.info.serial, ep.info.configJson);
       ep.connected = true;
@@ -591,6 +594,42 @@ void UsbTransport::RequestVersion(Open& o) {
   RequestProtocolVersion(o.dev, wirelessProtocol_);
 }
 
+void UsbTransport::WakeDarkDevice(Open& o, double now) {
+  constexpr double kFirst = 3.0, kMax = 60.0;  // s without light
+  if (!o.wantVersion || o.info.kind != EndpointKind::Wireless) return;
+  auto* w = decoder_.Wireless(o.info.ep);
+  if (!w) return;
+  if (o.lightAt == 0) o.lightAt = o.imuAt = now;
+  if (w->LightPackets() != o.lightPackets) {
+    o.lightPackets = w->LightPackets();
+    o.lightAt = now;
+    o.wakes = 0;
+  }
+  if (w->ImuPackets() != o.imuPackets) {
+    o.imuPackets = w->ImuPackets();
+    o.imuAt = now;
+  }
+  if (o.versionRequestTime != 0 || w->ProtocolVersion() == 2) return;   // a request is on its way
+  const double wait = std::min(kMax, kFirst * double(1u << std::min(o.wakes, 5)));
+  const double dark = now - o.lightAt;
+  if (dark < wait || now - o.imuAt > 0.5 || now - o.lastWake < wait) return;
+  // Taking turns: its protocol requested again, then its light mode cycled (the other mode, and
+  // back to the one it announced), in case the request alone doesn't bring the light back.
+  const int mode = w->OpticalSub();
+  const bool cycle = (o.wakes & 1) && (mode == 0 || mode == 1);
+  Log(o.wakes == 0 ? LogLevel::Info : LogLevel::Debug, "%s: no light for %.0f s while its IMU keeps coming; %s\n",
+      o.info.serial.c_str(), dark, cycle ? "cycling its light mode" : "asking for its radio protocol again");
+  o.lastWake = now;
+  ++o.wakes;
+  if (!cycle) {
+    RequestVersion(o);
+    return;
+  }
+  std::lock_guard lock(hapticMutex_);
+  haptics_.push_back({o.info.serial, OpticalSubProtocolReport(1 - mode), now + 1.0, false, 1 - mode});
+  haptics_.push_back({o.info.serial, OpticalSubProtocolReport(mode), now + 1.0, false, mode});
+}
+
 void UsbTransport::SetReceiver(const Open& o, const std::string& connected) {
   std::lock_guard lock(receiversMutex_);
   receivers_[o.receiver] = Receiver{o.receiver, connected, o.info.pid};
@@ -683,8 +722,50 @@ void UsbTransport::PumpDoorman(double now) {
       if (!dongle.IsOpen()) dongle.Open(f, now);
     }
   }
+  PlanDoormanHomes(dongles, now);
   // No lock held: a device detaching here calls back into OnDeviceGone through the sink.
   for (const auto& dongle : dongles) dongle->Pump(now);
+}
+
+void UsbTransport::PlanDoormanHomes(const std::vector<std::shared_ptr<DoormanDongle>>& dongles, double now) {
+  // Only dongles carrying a device share the channels out: one without sends nothing but join
+  // beacons (on the join channel, outside every home), so it keeps all 16 until a device joins it.
+  std::vector<DoormanDongle*> open;   // in serial order (doorman_ is kept sorted): the same split every time
+  std::vector<std::string> serials;
+  for (const auto& d : dongles) {
+    if (!d->IsOpen()) continue;
+    if (d->Connected().empty()) {
+      d->SetHome(0xFFFF);
+      d->WatchChannels(false);
+      continue;
+    }
+    open.push_back(d.get());
+    serials.push_back(d->Serial());
+  }
+  for (DoormanDongle* d : open) {
+    d->WatchChannels(open.size() >= 2);
+    DoormanDongle::ChannelReport report;
+    if (d->TakeChannels(&report)) homePlanner_.Observe(d->Serial(), report.mask, report.loss, now);
+  }
+  const std::vector<uint16_t> homes = homePlanner_.Homes(serials, now);
+  if (!homePlanner_.Change().empty()) Log(LogLevel::Info, "Doorman channels: %s\n", homePlanner_.Change().c_str());
+  for (size_t i = 0; i < open.size(); ++i) open[i]->SetHome(homes[i]);
+  if (int(open.size()) != homesPlannedFor_) {
+    homesPlannedFor_ = int(open.size());
+    if (open.size() > size_t(kDoormanHomesMax))
+      Log(LogLevel::Warn, "%d Doorman Dongles: more than %d share radio channels, expect more lost packets\n",
+          int(open.size()), kDoormanHomesMax);
+    else if (open.size() > 1)
+      Log(LogLevel::Info, "%d Doorman Dongles: radio channels split between them\n", int(open.size()));
+  }
+  for (size_t i = 0; i < open.size(); ++i) {
+    int channels = 0;
+    for (int k = 0; k < 16; ++k) channels += (homes[i] >> k) & 1;
+    const int fw = open[i]->Firmware();
+    if (fw && !open[i]->TakesHome(channels) && homesOld_.insert(open[i]->Serial()).second)
+      Log(LogLevel::Warn, "Doorman Dongle %s: its firmware can't take its share of the channels; update it in the openhouse installer\n",
+          open[i]->Serial().c_str());
+  }
 }
 
 bool UsbTransport::SetReceiverName(const std::string& receiver, const std::string& name) {
@@ -1068,6 +1149,7 @@ void UsbTransport::Run() {
         if (w && w->ProtocolVersion() != 2) o.versionRequestTime = 0;
         else if (passStart - o.versionRequestTime > 0.5) RequestVersion(o);
       }
+      WakeDarkDevice(o, passStart);
       int count = 0;
       for (; count < 10; count++) {
         reps[count].n = hid_read(o.dev, reps[count].buf, sizeof reps[count].buf);
@@ -1158,6 +1240,9 @@ void UsbTransport::Run() {
           o.generation = decoder_.WirelessGeneration(o.info.ep);
           Log(LogLevel::Info, "%s: radio epoch changed; resetting protocol and timestamp state\n", o.info.serial.c_str());
           if (o.wantVersion) RequestVersion(o);
+          o.lightAt = o.imuAt = reps[i].t;   // a new parser: its counts start over
+          o.lightPackets = o.imuPackets = 0;
+          o.wakes = 0;
         }
       }
       if (o.disconnected) sink_->OnDeviceDetached(o.info.serial);

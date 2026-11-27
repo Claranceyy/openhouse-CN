@@ -111,6 +111,13 @@ class DeviceTracker {
   std::vector<std::string> TakeLogs();
   // Keyframes for the room solver collected since the last call.
   std::vector<std::shared_ptr<const Keyframe>> TakeKeyframes();
+  // Bases whose light kept contradicting the pose from the primary, each time this device
+  // reacquired because of it: {primary, contradicting base} (Session::OnContradiction).
+  std::vector<std::pair<uint32_t, uint32_t>> TakeContradictions() {
+    std::vector<std::pair<uint32_t, uint32_t>> out;
+    out.swap(contradictions_);
+    return out;
+  }
   std::shared_ptr<const TrackedObjectModel> ImuModel() const { return imuModel_; }
   TrackingSource& Source() { return source_; }
 
@@ -145,6 +152,17 @@ class DeviceTracker {
   uint64_t roomRevision_ = ~uint64_t{0};
   uint64_t altSyncRevision_ = 0;
   uint64_t updatesAtAcquire_ = 0;
+  // Acquisitions in a row that started from a carried calibration and lost the light again before
+  // converging: the carried calibration may be why (CheckHealth drops it after kCarryStrikes).
+  std::vector<std::pair<uint32_t, uint32_t>> contradictions_;
+  bool acquiredWithCarry_ = false;
+  // When this acquisition's filter first counted as calibrated (0: not yet): its tilt only levels
+  // the room after kLevelAfter of it, and never as more certain than kTiltFloor.
+  double calibratedAt_ = 0;
+  static constexpr double kLevelAfter = 20.0;                                   // s
+  static constexpr double kTiltFloor = 0.25 * 0.25 * 3.046174197867086e-4;      // (0.25 deg)^2
+  int carryStrikes_ = 0;
+  static constexpr int kCarryStrikes = 3;
   bool hadTrack_ = false;
   bool calibratedLogged_ = false;
   std::vector<std::string> logs_;

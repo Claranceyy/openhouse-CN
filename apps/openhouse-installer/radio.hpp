@@ -116,6 +116,9 @@ struct DongleSlot {
   uint32_t storedRadio = 0;   // the radio version the dongle remembers for it, off too (fw 0x002C+; 0 unknown)
 };
 std::vector<DongleSlot> ScanDongleSlots(const DoormanDongleInfo& dongle);   // every slot it has
+// Closes the device handles kept open between scans (the radio pages' Watchman dongles and wired
+// devices), all but the Doorman Dongles' that the home page keeps checking. Going home.
+void ReleaseDeviceHandles();
 // The radio version a Doorman Dongle remembers for a slot (firmware 0x002D+; false before).
 bool SetRememberedRadio(const std::string& donglePath, int slot, uint32_t version);
 // Turns a device on a Doorman Dongle off (its main MCU's power-off command, as the driver sends it).

@@ -85,6 +85,7 @@ void DeviceTracker::SetImuDisabled(bool on) {
 void DeviceTracker::ResetFilter() {
   filter_ = std::make_unique<LighthouseDirect>(model_);
   refusedLit_ = 0;
+  calibratedAt_ = 0;
   // LH_STOCK_FILTER: the verified stock behaviour, for A/B comparisons.
   static const bool stock = std::getenv("LH_STOCK_FILTER") != nullptr;
   predictOutput_ = smoothOutput_ = holdStill_ = !stock;
@@ -471,6 +472,7 @@ void DeviceTracker::OnAcquired() {
     calibratedLogged_ = seed.calibrated;
   }
   updatesAtAcquire_ = filter_->Filter().updateCount;
+  acquiredWithCarry_ = carry_.has_value();
   char text[200];
   std::snprintf(text, sizeof text, "----- %s base %08X distance %.2fm%s%s -----", hadTrack_ ? "REACQUIRED" : "BOOTSTRAPPED",
                 primary, BaseFromImu(f.x).translation().norm(), base ? " (located)" : "",
@@ -510,7 +512,24 @@ void DeviceTracker::SyncRoom() {
     if (up.norm() > 0.5) room_->EstablishOrigin(primary, TiltFromUp(up), 1.5e-4);
     else if (calibrated && !imuDisabled_) room_->EstablishOrigin(primary, {f.x[16], f.x[17]}, f.P(16, 16));
   }
-  if (calibrated && !imuDisabled_ && primary == room_->Origin()) room_->RefineOriginTilt(primary, {f.x[16], f.x[17]}, f.P(16, 16), filter_->Time());
+  // Not stock: the room's first level from a device (a new room's, or a reset's, whose level is
+  // only its origin base's accelerometer so far). The filter's tilt just after it counts as
+  // calibrated is often degrees off while claiming a tenth of one (after a room reset, a headset
+  // 3 s in re-levelled the room by 6.5 deg at "0.07 deg"; two controllers at the same moment
+  // disagreed with it by 5 deg), and a level that sure kept every later, better one out. That
+  // first one is offered after 20 s of calibrated tracking, no surer than 0.25 deg; once the room
+  // has a device's level, refining it goes on as before (held back there too, the level stopped
+  // following the devices, and tracking in a stored room got worse).
+  if (calibrated && calibratedAt_ == 0) calibratedAt_ = Now();
+  if (calibrated && !imuDisabled_ && primary == room_->Origin()) {
+    const RoomBase* origin = room_->Base(primary);
+    // Exactly the accelerometer's (or SteamVR's) variance: no device has levelled it yet. A room
+    // loosened later (a base power-cycled, relearned) isn't a first level.
+    const bool firstLevel = origin && std::abs(origin->rotationVariance - RoomMap::kImportedLevelVariance) < 1e-9;
+    if (!firstLevel) room_->RefineOriginTilt(primary, {f.x[16], f.x[17]}, f.P(16, 16), filter_->Time());
+    else if (Now() - calibratedAt_ >= kLevelAfter)
+      room_->RefineOriginTilt(primary, {f.x[16], f.x[17]}, std::max(f.P(16, 16), kTiltFloor), filter_->Time());
+  }
   // Room-solver bases are the joint estimate from every device: keep the filter's
   // alternate-base states on them where the room knows better. Also when the filter
   // keeps rejecting a base's light: its own view of that base is wrong, and since a
@@ -659,6 +678,7 @@ void DeviceTracker::CheckHealth() {
                     "base %08X's light keeps contradicting the pose from %08X: reacquiring on %08X (attempt %d)",
                     on, primary, on, reacquireBurst_ + 1);
       Log(text);
+      if (contradictions_.size() < 16) contradictions_.emplace_back(primary, on);
       const auto& f = filter_->Filter();
       if (f.updateCount > 200 && f.CalibrationHealthy()) carry_ = f;
       ResetFilter();
@@ -768,6 +788,18 @@ void DeviceTracker::CheckHealth() {
       else carry_.reset();
     } else if (f.updateCount > 200) {
       carry_ = f;
+    }
+    // Not stock: kept that way, a carried calibration the light doesn't fit never goes. Each
+    // acquisition from it refused the light, lost it before converging, and carried the same one
+    // into the next: four trackers lost every 2-3 s for minutes, while a replay of their light
+    // from a fresh start tracked throughout. A few such losses in a row and it's dropped.
+    const bool quickLoss = acquiredWithCarry_ && f.updateCount < updatesAtAcquire_ + 200;
+    carryStrikes_ = quickLoss ? carryStrikes_ + 1 : 0;
+    if (carryStrikes_ >= kCarryStrikes && carry_) {
+      Log("lost again soon after every reacquisition with its carried IMU calibration: starting from a fresh one");
+      carry_.reset();
+      calm_.reset();
+      carryStrikes_ = 0;
     }
   } else {
     // Never reseed the very calibration rejected by HealthCheck: that creates

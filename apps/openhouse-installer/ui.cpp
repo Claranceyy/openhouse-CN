@@ -19,6 +19,7 @@
 
 #include "common/dongle_bank.hpp"
 #include "common/nordic_dfu.hpp"
+#include "common/ui_scale.hpp"
 #include "common/ui_theme.hpp"
 #include "lh/github.hpp"
 #include "lh/version.hpp"
@@ -761,20 +762,38 @@ void Job::Start(std::function<bool(Job&)> work, bool devices) {
   });
 }
 
-void Ui::SetUpImGui() {
+void Ui::SetUpImGui(float k) {
   ImGuiIO& io = ImGui::GetIO();
   io.IniFilename = nullptr;
-  io.Fonts->Clear();
-  // ImGui's own pixel font: sharp only at whole multiples of its 13 px.
-  ImFontConfig font;
-  font.OversampleH = font.OversampleV = 1;
-  font.PixelSnapH = true;
-  font.SizePixels = 13.f;
-  io.Fonts->AddFontDefault(&font);
-  font.SizePixels = 26.f;
-  g_title = io.Fonts->AddFontDefault(&font);
-  font.SizePixels = 39.f;
-  g_huge = io.Fonts->AddFontDefault(&font);
+  static ImFont *bodyBmp = nullptr, *titleBmp = nullptr, *hugeBmp = nullptr;
+  static ImFont *bodyVec = nullptr, *titleVec = nullptr, *hugeVec = nullptr;
+  if (io.Fonts->Fonts.empty()) {
+    // Load both ProggyClean (sharp bitmap at integer scales) and ProggyForever (matching pixel-style
+    // vector for fractional scales) once so runtime switches never clear the live font atlas.
+    ImFontConfig bmp;
+    bmp.OversampleH = bmp.OversampleV = 1;
+    bmp.PixelSnapH = true;
+    bmp.SizePixels = 13.f;
+    bodyBmp = io.Fonts->AddFontDefaultBitmap(&bmp);
+    bmp.SizePixels = 26.f;
+    titleBmp = io.Fonts->AddFontDefaultBitmap(&bmp);
+    bmp.SizePixels = 39.f;
+    hugeBmp = io.Fonts->AddFontDefaultBitmap(&bmp);
+
+    ImFontConfig vec;
+    vec.PixelSnapH = true;
+    vec.SizePixels = 13.f;
+    bodyVec = io.Fonts->AddFontDefaultVector(&vec);
+    vec.SizePixels = 26.f;
+    titleVec = io.Fonts->AddFontDefaultVector(&vec);
+    vec.SizePixels = 39.f;
+    hugeVec = io.Fonts->AddFontDefaultVector(&vec);
+  }
+  const bool integerScale = std::fabs(k - std::round(k)) < 0.01f;
+  io.FontDefault = integerScale ? bodyBmp : bodyVec;
+  g_title = integerScale ? titleBmp : titleVec;
+  g_huge = integerScale ? hugeBmp : hugeVec;
+  ImGui::GetStyle() = ImGuiStyle();
   ImGui::StyleColorsDark();
   ImGuiStyle& style = ImGui::GetStyle();
   style.WindowRounding = 0;
@@ -782,7 +801,9 @@ void Ui::SetUpImGui() {
   style.FramePadding = ImVec2(10, 7);
   style.ItemSpacing = ImVec2(10, 9);
   style.WindowPadding = ImVec2(18, 14);
-  lh::ui::ApplyTheme();
+  style.ScaleAllSizes(k);
+  style.FontScaleMain = k;
+  lh::ui::ApplyTheme(k);
 }
 
 Ui::Ui() {
@@ -867,6 +888,7 @@ void Ui::Go(Page page) {
   if (!job_.Running()) job_.Reset();
   page_ = page;
   checked_.clear();
+  if (page == Page::Home) ReleaseDeviceHandles();
   RefreshStatus();
   installAction_ = InstallAction();
   switch (page) {
@@ -971,6 +993,11 @@ void Ui::Header() {
   ImGui::PopFont();
   ImGui::TextColored(kMuted, "Installer v%s", lh::kVersion);
   ImGui::EndGroup();
+  if (drawScale_) {
+    const float w = lh::ui::ScaleComboWidth();
+    ImGui::SameLine(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x - w));
+    drawScale_();
+  }
 }
 
 // Bottom: what's installed now, and where SteamVR is.
@@ -1147,7 +1174,7 @@ void Ui::Home() {
   Prompt("What would you like to do?");
   // Doorman Dongles on other firmware than this package's.
   if (!homeWatching_) {
-    homeDongles_.Start(FindDongleUpdates, 5.0);
+    homeDongles_.Start(FindDongleUpdates, 5.0, true);
     homeWatching_ = true;
   }
   int outdated = 0;
@@ -1332,7 +1359,7 @@ void Ui::StartAutoUninstall() {
 // After installing: Doorman Dongles on older firmware than this package's.
 void Ui::DongleUpdateOffer() {
   if (!homeWatching_) {
-    homeDongles_.Start(FindDongleUpdates, 5.0);
+    homeDongles_.Start(FindDongleUpdates, 5.0, true);
     homeWatching_ = true;
   }
   int outdated = 0;
@@ -1743,8 +1770,27 @@ void Ui::DonglePage() {
                               {Icon::Dongle, "Kuroshin", "It needs to be put into DFU mode by opening the dongle and shorting two pins"},
                               {Icon::Headset, "Valve Index", "The headset's own radio. Index only", Tint::Yellow}},
                              ImGui::GetFontSize() * 15);
-      if (tile >= 0) watch(kBoards[tile]);
+      // The Index's radio is found by Valve's radio USB id, which other headsets' radios (Bigscreen
+      // Beyond) and Valve's own dongles share: another headset's radio can be picked. Accepted first.
+      if (tile == 4) {
+        confirmedIndex_ = false;
+        dongleStep_ = DongleStep::IndexWarning;
+      } else if (tile >= 0) {
+        watch(kBoards[tile]);
+      }
       Back(Page::DoormanMenu);
+      return;
+    }
+    case DongleStep::IndexWarning: {
+      Warning("ONLY for the Valve Index!",
+              "This is not fully tested and will probably brick any headset other than the Valve Index.\n"
+              "Do not use it if you are not certain you want to flash your Index, or if you use a wired headset other than the Index!");
+      ImGui::Spacing();
+      ImGui::Checkbox("I understand, this is a Valve Index", &confirmedIndex_);
+      ImGui::BeginDisabled(!confirmedIndex_);
+      if (BigButton("Continue", ImGui::GetFontSize() * 12)) WatchDongles(4);
+      ImGui::EndDisabled();
+      if (BackButton()) dongleStep_ = DongleStep::Board;
       return;
     }
     case DongleStep::Detect: {
@@ -1870,6 +1916,7 @@ void Ui::DonglePage() {
         // restore: SteamVR's stock radio firmware back on it.
         const auto ask = [this](const std::string& serial, std::function<bool()> enter, bool restore) {
           indexRestore_ = restore;
+          confirmedIndexFlash_ = false;
           indexFlash_ = [serial, enter, restore, steam = Utf8(steamvr_.root)](Job& j) {
             const std::string package = IndexRadioPackage(steam);
             const fs::path image = FirmwareFolder() / "dongle" / "doorman-index.bin";
@@ -1928,12 +1975,17 @@ void Ui::DonglePage() {
           if (indexRestore_)
             ImGui::TextUnformatted("The radio gets SteamVR's own firmware back. If something goes wrong, the headset has to be "
                                    "physically opened to fix it. Are you sure you want to continue?");
-          else
+          else {
+            ImGui::TextColored(kBad, "Not fully tested: it will probably brick any headset other than the Valve Index.");
             ImGui::TextUnformatted("Buying a dongle is recommended over this. If something goes wrong, the headset has to be physically "
                                    "opened to fix it. Are you sure you want to continue?");
+          }
           ImGui::PopTextWrapPos();
           ImGui::Spacing();
+          if (!indexRestore_) ImGui::Checkbox("I understand, flash my Valve Index", &confirmedIndexFlash_);
+          ImGui::BeginDisabled(!indexRestore_ && !confirmedIndexFlash_);
           if (BigButton("Continue", fs * 9)) { ImGui::CloseCurrentPopup(); start(indexFlash_); }
+          ImGui::EndDisabled();
           ImGui::SameLine();
           if (BigButton("Cancel", fs * 9)) ImGui::CloseCurrentPopup();
           ImGui::EndPopup();
@@ -2236,7 +2288,7 @@ void Ui::DongleUpdatePick() {
   Title("Update Dongles");
   if (autoInstall_) RuntimesClosed();   // --dongles: VR closes from the start (the user agreed in the overlay)
   if (!homeWatching_) {
-    homeDongles_.Start(FindDongleUpdates, 5.0);
+    homeDongles_.Start(FindDongleUpdates, 5.0, true);
     homeWatching_ = true;
   }
   Prompt("Select the dongle");

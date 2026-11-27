@@ -14,6 +14,9 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <functional>
+#include <mutex>
+#include <set>
 #include <thread>
 
 namespace openhouse::installer {
@@ -92,25 +95,95 @@ std::string LhrSerial(uint32_t v) {
 }
 
 // ---- the Doorman Dongle's HID protocol (ai/doorman/protocol.md) ----
+
+// Open dongle interfaces, kept between uses. Opening one costs 50 ms on Linux whenever nothing else
+// has it open (the kernel waits for stale input to drain), five per dongle: the home page's update
+// check opened them twice every 5 s, half a second before it asked anything. Taken out while in
+// use; what queued up meanwhile is read away first, so an old reply isn't taken for a new one. A
+// handle that failed (unplugged, rebooted for an update) is closed instead of kept. The other
+// pages' devices are let go on the way back home (ReleaseDeviceHandles): only the Doorman Dongles'
+// stay, which the home page itself keeps checking.
+class HidPool {
+ public:
+  static void ReleaseAllBut(const std::function<bool(const std::string&)>& keep) {
+    std::lock_guard lock(Mutex());
+    auto& pool = Pool();
+    for (auto it = pool.begin(); it != pool.end();) {
+      if (keep(it->first)) { ++it; continue; }
+      hid_close(it->second);
+      it = pool.erase(it);
+    }
+  }
+  static hid_device* Take(const std::string& path) {
+    hid_device* h = nullptr;
+    {
+      std::lock_guard lock(Mutex());
+      auto& pool = Pool();
+      if (const auto it = pool.find(path); it != pool.end()) {
+        h = it->second;
+        pool.erase(it);
+      }
+    }
+    if (!h) return hid_open_path(path.c_str());
+    uint8_t r[64];
+    for (int i = 0; i < 4096; ++i) {
+      const int n = hid_read_timeout(h, r, sizeof r, 0);
+      if (n == 0) return h;
+      if (n < 0) break;
+    }
+    hid_close(h);   // failed while kept: open afresh
+    return hid_open_path(path.c_str());
+  }
+  static void Give(const std::string& path, hid_device* h, bool healthy) {
+    if (!h) return;
+    if (!healthy) {
+      hid_close(h);
+      return;
+    }
+    std::lock_guard lock(Mutex());
+    auto& pool = Pool();
+    if (const auto it = pool.find(path); it != pool.end()) hid_close(it->second);
+    pool[path] = h;
+  }
+
+ private:
+  static std::mutex& Mutex() { static std::mutex m; return m; }
+  static std::map<std::string, hid_device*>& Pool() { static std::map<std::string, hid_device*> p; return p; }
+};
+
+// Interfaces of Doorman Dongles seen (ReleaseDeviceHandles keeps theirs). Scans note them on their
+// threads; the UI reads them going home.
+std::mutex g_doormanPathsMutex;
+std::set<std::string> g_doormanPaths;
+void NoteDoormanPath(const std::string& path) {
+  std::lock_guard lock(g_doormanPathsMutex);
+  g_doormanPaths.insert(path);
+}
+
 class DoormanDongle {
  public:
   explicit DoormanDongle(const std::string& path) {
-    dev0_ = hid_open_path(path.c_str());
+    NoteDoormanPath(path);
+    dev0_ = HidPool::Take(path);
     if (!dev0_) return;
     devs_[0] = dev0_;
+    paths_[0] = path;
     // The other interfaces carry the slots' streams (slot s on interface s % 5; s % 4 before fw 0x002B).
     if (hid_device_info* list = hid_enumerate(kDoormanVid, kDoormanPid)) {
       wchar_t serial[64]{};
       hid_get_serial_number_string(dev0_, serial, 64);
       for (hid_device_info* d = list; d; d = d->next)
         if (d->interface_number > 0 && d->interface_number < kInterfaces && !devs_[d->interface_number] && d->serial_number &&
-            std::wcscmp(d->serial_number, serial) == 0)
-          devs_[d->interface_number] = hid_open_path(d->path);
+            std::wcscmp(d->serial_number, serial) == 0) {
+          NoteDoormanPath(d->path);
+          devs_[d->interface_number] = HidPool::Take(d->path);
+          paths_[d->interface_number] = d->path;
+        }
       hid_free_enumeration(list);
     }
   }
   ~DoormanDongle() {
-    for (hid_device* d : devs_) if (d) hid_close(d);
+    for (int i = 0; i < kInterfaces; ++i) HidPool::Give(paths_[i], devs_[i], !failed_);
   }
   bool Ok() const { return dev0_ != nullptr; }
 
@@ -119,7 +192,7 @@ class DoormanDongle {
     const uint8_t seq = seq_;
     uint8_t out[65] = {0, cmd, seq};
     std::memcpy(out + 3, args, std::min<size_t>(n, 62));
-    if (hid_write(dev0_, out, sizeof out) < 0) return false;
+    if (hid_write(dev0_, out, sizeof out) < 0) { failed_ = true; return false; }
     const double until = Now() + timeoutMs / 1000.0;
     while (Now() < until && !ScanStopping()) {
       int status = -1;
@@ -168,7 +241,7 @@ class DoormanDongle {
       for (hid_device* dev : devs_) {
         if (!dev) continue;
         const int n = hid_read_timeout(dev, r, sizeof r, 0);
-        if (n < 0) return false;
+        if (n < 0) { failed_ = true; return false; }
         if (n == 0) continue;
         got = any = true;
         if (r[0] >= 0x80 && r[0] <= 0x82) Stream(r, n);
@@ -178,7 +251,7 @@ class DoormanDongle {
     }
     if (any) return true;
     const int n = hid_read_timeout(dev0_, r, sizeof r, waitMs);
-    if (n < 0) return false;
+    if (n < 0) { failed_ = true; return false; }
     if (n > 0) {
       if (r[0] >= 0x80 && r[0] <= 0x82) Stream(r, n);
       else if (reply && n >= 3) reply(r);
@@ -234,6 +307,8 @@ class DoormanDongle {
   static constexpr int kInterfaces = 5;   // interface 0: commands; slot s streams on interface s % 5 (s % 4 before fw 0x002B)
   hid_device* dev0_ = nullptr;
   hid_device* devs_[kInterfaces] = {};
+  std::string paths_[kInterfaces];
+  bool failed_ = false;   // a read or write failed: its handles aren't kept
   uint8_t seq_ = 0;
   std::vector<std::pair<int, std::string>> frames_;
   std::map<int, std::string> frag_, packed_;
@@ -529,9 +604,9 @@ std::vector<WiredDevice> FindWiredDevices() {
     w.serial = Narrow(d->serial_number);
     w.pid = d->product_id;
     if (std::any_of(out.begin(), out.end(), [&](const WiredDevice& o) { return o.serial == w.serial; })) continue;
-    if (hid_device* dev = hid_open_path(d->path)) {
+    if (hid_device* dev = HidPool::Take(d->path)) {   // kept open between scans (HidPool)
       w.model = ModelFor(HardwareId(dev));
-      hid_close(dev);
+      HidPool::Give(d->path, dev, w.model.hwid != 0);
     }
     if (w.model.hwid == 0) continue;  // couldn't read it (in use?)
     // An unknown device's radio, by how it's plugged in: the nRF51 devices have their own USB ids.
@@ -616,7 +691,7 @@ std::vector<WirelessDevice> FindWirelessDevices() {
   for (hid_device_info* d = list; d; d = d->next) {
     if (d->product_id != kWatchman && d->product_id != kWatchmanV2) continue;
     if (d->interface_number > 0) continue;
-    hid_device* dev = hid_open_path(d->path);
+    hid_device* dev = HidPool::Take(d->path);   // kept open between scans (HidPool)
     if (!dev) continue;
     uint32_t radio = 0;
     const uint32_t serial = ConnectedSerial(dev, &radio);
@@ -635,7 +710,7 @@ std::vector<WirelessDevice> FindWirelessDevices() {
       w.model = ModelFor(HardwareId(dev));
       if (w.model.hwid) out.push_back(w);
     }
-    hid_close(dev);
+    HidPool::Give(d->path, dev, true);
   }
   hid_free_enumeration(list);
   // Doorman Dongles: the devices in their slots that are connected now, running our radio.
@@ -763,6 +838,15 @@ bool RebootToBootloader(const DoormanDongleInfo& d) {
   if (!dev.Ok()) return false;
   dev.Command(0x10, nullptr, 0, nullptr, 200);  // it resets right away: no reply expected
   return true;
+}
+
+void ReleaseDeviceHandles() {
+  std::set<std::string> keep;
+  {
+    std::lock_guard lock(g_doormanPathsMutex);
+    keep = g_doormanPaths;
+  }
+  HidPool::ReleaseAllBut([&](const std::string& path) { return keep.count(path) > 0; });
 }
 
 // ---- the Index HMD's radio ----

@@ -327,6 +327,14 @@ class SessionImpl final : public Session, public InputSinkBase {
   bool ScoutCovers(const Device& d) const;
   void PushIdentities();
   void TakeKeyframes(Device& d);
+  // Devices' reacquisitions because one base's light kept contradicting the pose from another.
+  // Some, from several devices (or many from one), in a short while: the room has those two
+  // wrong relative to each other, and it never learns better, because devices that keep
+  // reacquiring make no keyframes (a room from SteamVR whose bases no longer agree with the
+  // light: every device lost 1-2 times a second for minutes). The pair's non-origin base, or
+  // the less learned of the two, is relearned.
+  void TakeContradictions(const DeviceId& id, Device& d);
+  std::map<std::pair<uint32_t, uint32_t>, std::deque<std::pair<double, DeviceId>>> contradictions_;
   bool SolveDue() const;
   RoomSolveInput SolveInput();
   void ApplySolve(const RoomSolveOutput& out);
@@ -692,6 +700,7 @@ bool SessionImpl::SetUpDevice(const DeviceId& id, const std::string& config) {
     d.info.resourceRoot = j.value("resource_root", "");
     d.info.inputProfile = j.value("input_profile", "");
     d.info.registeredType = j.value("registered_device_type", "");
+    d.info.configSerial = j.value("device_serial_number", "");
     d.info.controllerRole = j.value("tracked_controller_role", "");
     if (const auto r = roles_.find(id); r != roles_.end() && d.info.role != DeviceRole::Hmd) {
       // settings.json "roles": the values of tracked_controller_role.
@@ -1203,6 +1212,7 @@ void SessionImpl::Process(const DeviceId& id, Device& d) {
   d.tracker->Process();
   ShareMultiLayout(id, d);
   TakeKeyframes(d);
+  TakeContradictions(id, d);
   CollectLogs(&d);
   const auto out = d.tracker->Output();
   if (out.state != d.lastState) {
@@ -1263,6 +1273,32 @@ void SessionImpl::ShareMultiLayout(const DeviceId& id, Device& d) {
                                       ": told every device");
   for (auto& [otherId, other] : devices_)
     if (other.tracker && &other != &d) { other.tracker->Source().SetMultiLayout(mine); other.multiLayout = mine; }
+}
+
+void SessionImpl::TakeContradictions(const DeviceId& id, Device& d) {
+  constexpr double kWindow = 5, kCooldown = 60;  // s: in a burst (a wrong room), not now and then (fast motion)
+  constexpr size_t kFromSeveral = 3, kFromOne = 6;
+  for (const auto& [primary, alt] : d.tracker->TakeContradictions()) {
+    const RoomBase* p = room_.Base(primary);
+    const RoomBase* a = room_.Base(alt);
+    if (!p || !a || p->relearn || a->relearn) continue;
+    auto& seen = contradictions_[std::minmax(primary, alt)];
+    seen.emplace_back(now_, id);
+    while (!seen.empty() && now_ - seen.front().first > kWindow) seen.pop_front();
+    std::set<DeviceId> devices;
+    for (const auto& [t, device] : seen) devices.insert(device);
+    if (seen.size() < kFromOne && (devices.size() < 2 || seen.size() < kFromSeveral)) continue;
+    uint32_t target;
+    if (p->origin || a->origin) target = p->origin ? alt : primary;   // the room keeps its origin (SteamVR's, with its rooms)
+    else target = std::max(p->observations, p->storedObservations) <= std::max(a->observations, a->storedObservations) ? primary : alt;
+    if (const auto c = lightCooldown_.find(target); c != lightCooldown_.end() && now_ < c->second) continue;
+    char why[200];
+    std::snprintf(why, sizeof why, "its light and base %08X's keep contradicting each other: %zu reacquisitions by %zu device(s) in %.0f s",
+                  target == primary ? alt : primary, seen.size(), devices.size(), now_ - seen.front().first);
+    room_.Bump(target, why);
+    lightCooldown_[target] = now_ + kCooldown;
+    seen.clear();
+  }
 }
 
 void SessionImpl::TakeKeyframes(Device& d) {

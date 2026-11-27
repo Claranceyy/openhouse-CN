@@ -235,10 +235,18 @@ bool WirelessReportParser::DecodePacket(const uint8_t* pkt, int64_t* imuTicks) {
         wv2_ = probe_[k];
         pkt_ = probed;
         ok = true;
+        if (sink_)
+          sink_->OnTransportLog(LogLevel::Info, dev_->id + ": radio protocol 1 found by probing (optical sub-protocol " +
+                                                    std::to_string(wv2_.opticalSub) + ", controller " +
+                                                    std::to_string(wv2_.controllerSub) + ")");
         break;
       }
     }
-  } else if (version_ == 1) ok = wv2_.Decode(pkt[0], pkt + 2, pkt[1], &pkt_);
+    if (ok && version_ == 1) NoteSubProtocols(wv2_);
+  } else if (version_ == 1) {
+    ok = wv2_.Decode(pkt[0], pkt + 2, pkt[1], &pkt_);
+    if (ok) NoteSubProtocols(wv2_);
+  }
   else {
     // 0x3ccaf0: waiting for "len 3, 0xe2, version"
     if (pkt[1] == 3 && pkt[3] == 0xe2) {
@@ -252,7 +260,9 @@ bool WirelessReportParser::DecodePacket(const uint8_t* pkt, int64_t* imuTicks) {
     version_ = pkt_.newVersion;  // "device switched to report protocol %d" — rest of packet dropped
     return true;
   }
+  if (!pkt_.lh2.empty() || !pkt_.pulses.empty()) ++lightPackets_;
   if (pkt_.hasImu) {
+    ++imuPackets_;
     const int64_t t = dev_->ticks.Unwrap(pkt_.imuTs, 32);
     *imuTicks = t;
     if (imu_.IsNew(t)) imu_.Emit(pkt_.imuRaw, t);
@@ -303,6 +313,29 @@ bool WirelessReportParser::DecodePacket(const uint8_t* pkt, int64_t* imuTicks) {
     else sink_->OnAux(dev_->id, {double(t) * kTick, int(0xfe - p.sensor), 0});
   }
   return true;
+}
+
+void WirelessReportParser::NoteSubProtocols(const Wv2Decoder& d) {
+  if (d.opticalSub == knownOptical_ && d.controllerSub == knownController_) return;
+  if (sink_ && (knownOptical_ != 0xff || knownController_ != 0xff))
+    sink_->OnTransportLog(LogLevel::Info, dev_->id + ": radio sub-protocols optical " + std::to_string(knownOptical_) +
+                                              " -> " + std::to_string(d.opticalSub) + ", controller " +
+                                              std::to_string(knownController_) + " -> " + std::to_string(d.controllerSub));
+  knownOptical_ = d.opticalSub;
+  knownController_ = d.controllerSub;
+}
+
+void WirelessReportParser::SeedSubProtocols(int opticalSub, int controllerSub) {
+  // Only what the device announced: an unknown (0xff) keeps the stock "wait for it".
+  if (opticalSub != 0xff) {
+    wv2_.opticalSub = opticalSub;
+    knownOptical_ = opticalSub;
+  }
+  if (controllerSub != 0xff) {
+    wv2_.controllerSub = controllerSub;
+    knownController_ = controllerSub;
+    for (auto& p : probe_) p.controllerSub = controllerSub;
+  }
 }
 
 bool WirelessReportParser::Parse(double hostTime, const uint8_t* data, size_t len, bool lastInBatch) {

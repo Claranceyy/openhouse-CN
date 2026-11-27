@@ -2,6 +2,7 @@
 # arm-none-eabi-gcc and Python's unicorn. run.sh runs everything on a capture.
 #   make            host tools: codec_roundtrip, cycle_sim, emu/batch_ref
 #   make emu        the radio's batch path for the Cortex-M4 (build/radio_batch.elf / .bin)
+#   make check      hop_test: the dongle's link.c hopping on the host (CI runs it)
 B = build
 COMMON = ../common
 CC ?= cc
@@ -13,6 +14,13 @@ HDRS = $(COMMON)/doorman_codec.h $(COMMON)/doorman_lh2p.h $(COMMON)/doorman_link
 comma := ,
 all: $(B)/codec_roundtrip $(B)/cycle_sim $(B)/batch_ref $(B)/lh2gen_check
 emu: $(B)/radio_batch.bin $(B)/gen_emu.bin $(B)/gen_ref
+check: $(B)/hop_test
+	$(B)/hop_test
+
+# link.c itself, against a stand-in for the nRF registers (stub/nrf.h)
+$(B)/hop_test: hop_test.c stub/nrf.h ../dongle-fw/src/link.c ../dongle-fw/src/dongle.h ../dongle-fw/src/banks.h $(HDRS)
+	@mkdir -p $(B)
+	$(CC) $(HOSTFLAGS) -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast -Istub $< -o $@
 
 $(B)/%: %.c $(HDRS)
 	@mkdir -p $(B)
@@ -38,4 +46,4 @@ $(B)/lh2gen_check: lh2gen_check.c $(COMMON)/doorman_lh2gen.h
 	$(CC) $(HOSTFLAGS) $< -o $@
 clean:
 	rm -rf $(B)
-.PHONY: all emu clean
+.PHONY: all emu check clean

@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <set>
 #include <memory>
@@ -21,8 +22,9 @@ class Ui {
  public:
   Ui();
   ~Ui();
-  static void SetUpImGui(int k);
+  static void SetUpImGui(float k);
   void SetLogo(uint64_t texture) { logo_ = texture; }
+  void SetScaleDrawer(std::function<void()> drawer) { drawScale_ = std::move(drawer); }
   void Poll(double now);
   void Draw(float width, float height);
   void SaveSettings();
@@ -66,6 +68,7 @@ class Ui {
   bool toastError_ = false;
   double toastUntil_ = 0, now_ = 0;
   uint64_t logo_ = 0;
+  std::function<void()> drawScale_;
   // firmware update (UF2 drive copy), on a thread of its own
   char firmwarePath_[512] = {};
   double lastSave_ = 0;

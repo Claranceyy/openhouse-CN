@@ -18,10 +18,10 @@ TEST(HidList, ParsesVendorProductAndInterfaceFromWindowsPaths) {
   ASSERT_TRUE(ParseHidPath(R"(\\?\HID#VID_28DE&PID_2300&MI_02&Col01#9&1a&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030})", &vid, &pid, &iface));
   EXPECT_EQ(pid, 0x2300);
   EXPECT_EQ(iface, 2);
-  // Not a composite device: no interface number.
-  ASSERT_TRUE(ParseHidPath(R"(\\?\hid#vid_0bb4&pid_0306#7&1&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030})", &vid, &pid, &iface));
-  EXPECT_EQ(vid, 0x0bb4);
-  EXPECT_EQ(iface, -1);
+  // Not a composite device (the Vive Watchman dongle): its one interface, 0, as hidapi has it.
+  ASSERT_TRUE(ParseHidPath(R"(\\?\hid#vid_28de&pid_2101#7&1&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030})", &vid, &pid, &iface));
+  EXPECT_EQ(pid, 0x2101);
+  EXPECT_EQ(iface, 0);
   // Bluetooth HID paths and junk.
   EXPECT_FALSE(ParseHidPath(R"(\\?\hid#{00001124-0000-1000-8000-00805f9b34fb}_dev_vid&02045e_pid&0b13)", &vid, &pid, &iface));
   EXPECT_FALSE(ParseHidPath("", &vid, &pid, &iface));

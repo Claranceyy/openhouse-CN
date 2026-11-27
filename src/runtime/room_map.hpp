@@ -127,6 +127,9 @@ class RoomMap {
   bool LevelSettled() const;
   // An origin's level from a base accelerometer or from SteamVR's database: devices will refine it.
   static constexpr double kImportedLevelVariance = 1.5e-4;
+  // The other bases of a room imported from SteamVR: a starting guess (3 cm, 1 deg), refined by the light.
+  static constexpr double kImportedPositionVariance = 3 * 0.03 * 0.03;
+  static constexpr double kImportedRotationVariance = 3 * 0.0175 * 0.0175;
   // A solve for a base far outside what the room and the solve allow (a moved base).
   bool FarOff(uint32_t serial, const Eigen::Isometry3d& worldFromBase, double positionVariance,
               double rotationVariance) const;

@@ -14,6 +14,7 @@
 
 #include "common/dongle_bank.hpp"
 #include "common/nordic_dfu.hpp"
+#include "common/ui_scale.hpp"
 #include "common/ui_theme.hpp"
 #include "lh/telemetry.hpp"
 #include "lh/version.hpp"
@@ -213,27 +214,45 @@ void Ui::SaveSettings() {
   knownDirty_ = false;
 }
 
-void Ui::SetUpImGui(int k) {
+void Ui::SetUpImGui(float k) {
   ImGuiIO& io = ImGui::GetIO();
   io.IniFilename = nullptr;
-  io.Fonts->Clear();
-  ImFontConfig font;
-  font.OversampleH = font.OversampleV = 1;
-  font.PixelSnapH = true;
-  font.SizePixels = 13.f * k;
-  io.Fonts->AddFontDefault(&font);
-  font.SizePixels = 13.f * (k + 1);
-  g_title = io.Fonts->AddFontDefault(&font);
-  font.SizePixels = 13.f * (k + 2);
-  g_huge = io.Fonts->AddFontDefault(&font);
+  static ImFont *bodyBmp = nullptr, *titleBmp = nullptr, *hugeBmp = nullptr;
+  static ImFont *bodyVec = nullptr, *titleVec = nullptr, *hugeVec = nullptr;
+  if (io.Fonts->Fonts.empty()) {
+    ImFontConfig bmp;
+    bmp.OversampleH = bmp.OversampleV = 1;
+    bmp.PixelSnapH = true;
+    bmp.SizePixels = 13.f;
+    bodyBmp = io.Fonts->AddFontDefaultBitmap(&bmp);
+    bmp.SizePixels = 26.f;
+    titleBmp = io.Fonts->AddFontDefaultBitmap(&bmp);
+    bmp.SizePixels = 39.f;
+    hugeBmp = io.Fonts->AddFontDefaultBitmap(&bmp);
+
+    ImFontConfig vec;
+    vec.PixelSnapH = true;
+    vec.SizePixels = 13.f;
+    bodyVec = io.Fonts->AddFontDefaultVector(&vec);
+    vec.SizePixels = 26.f;
+    titleVec = io.Fonts->AddFontDefaultVector(&vec);
+    vec.SizePixels = 39.f;
+    hugeVec = io.Fonts->AddFontDefaultVector(&vec);
+  }
+  const bool integerScale = std::fabs(k - std::round(k)) < 0.01f;
+  io.FontDefault = integerScale ? bodyBmp : bodyVec;
+  g_title = integerScale ? titleBmp : titleVec;
+  g_huge = integerScale ? hugeBmp : hugeVec;
+  ImGui::GetStyle() = ImGuiStyle();
   ImGui::StyleColorsDark();
   ImGuiStyle& style = ImGui::GetStyle();
   style.WindowRounding = 0;
   style.FramePadding = ImVec2(8, 6);
   style.ItemSpacing = ImVec2(10, 8);
   style.WindowPadding = ImVec2(12, 12);
-  style.ScaleAllSizes(float(k));
-  lh::ui::ApplyTheme(float(k));
+  style.ScaleAllSizes(k);
+  style.FontScaleMain = k;
+  lh::ui::ApplyTheme(k);
   style.Colors[ImGuiCol_ChildBg] = lh::ui::CardColor();   // bordered panels are cards over the snow
 }
 
@@ -332,7 +351,7 @@ void Ui::Draw(float width, float height) {
   ImGui::Begin("Doorman Dongle", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                                                 ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollbar);
   lh::ui::Snow(ImGui::GetWindowDrawList(), ImVec2(0, 0), ImVec2(width, height));
-  const float statusHeight = ImGui::GetFrameHeightWithSpacing() + 4;
+  const float statusHeight = ImGui::GetFrameHeightWithSpacing() + 4 * lh::ui::Scale();
   const float body = ImGui::GetContentRegionAvail().y - statusHeight;
   Sidebar(body);
   ImGui::SameLine();
@@ -423,6 +442,11 @@ void Ui::StatusBar() {
   ImGui::AlignTextToFramePadding();
   if (!toast_.empty() && now_ < toastUntil_) ImGui::TextColored(toastError_ ? kBad : kGood, "%s", toast_.c_str());
   else ImGui::TextDisabled("openhouse %s", lh::kVersion);
+  if (drawScale_) {
+    const float w = lh::ui::ScaleComboWidth();
+    ImGui::SameLine(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x - w));
+    drawScale_();
+  }
 }
 
 void Ui::NoDongle() {

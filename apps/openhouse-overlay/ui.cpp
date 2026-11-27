@@ -16,6 +16,7 @@
 
 #include "common/tracker_names.hpp"
 #include "common/ui_name_fonts.hpp"
+#include "common/ui_scale.hpp"
 #include "common/ui_theme.hpp"
 #include "lh/bug_report.hpp"
 #include "lh/version.hpp"
@@ -202,36 +203,49 @@ void Ui::SaveSettings() const {
   std::ofstream(SettingsPath()) << j.dump(2) << "\n";
 }
 
-void Ui::SetUpImGui(int k) {
+void Ui::SetUpImGui(float k) {
   ImGuiIO& io = ImGui::GetIO();
   io.IniFilename = nullptr;
-  io.Fonts->Clear();
-  // ImGui's own pixel font: sharp only at whole multiples of its 13 px.
-  ImFontConfig font;
-  font.OversampleH = font.OversampleV = 1;
-  font.PixelSnapH = true;
-  auto add = [&](float size) {
-    font.SizePixels = size;
-    return io.Fonts->AddFontDefault(&font);
-  };
-  add(13.f * k);
-  lh::ui::MergeTrackerNameFonts(*io.Fonts);
-  // The name fonts merge into the font added just above (MergeMode takes Fonts.back()), so only
-  // that one can draw a name outside ProggyClean's 0x20-0xFF. That is the font every device
-  // label uses, including the detail heading, which scales it with PushFont(nullptr, size).
-  // If a name ever needs g_title or g_huge, merge into those too - at the cost of another copy
-  // of each font file, which is why it isn't done for all three.
-  g_title = add(13.f * (k + 1));
-  g_huge = add(13.f * (k + 2));
+  static ImFont *bodyBmp = nullptr, *titleBmp = nullptr, *hugeBmp = nullptr;
+  static ImFont *bodyVec = nullptr, *titleVec = nullptr, *hugeVec = nullptr;
+  if (io.Fonts->Fonts.empty()) {
+    // Load both ProggyClean (integer scales) and ProggyForever (fractional scales) once.
+    ImFontConfig bmp;
+    bmp.OversampleH = bmp.OversampleV = 1;
+    bmp.PixelSnapH = true;
+    bmp.SizePixels = 13.f;
+    bodyBmp = io.Fonts->AddFontDefaultBitmap(&bmp);
+    lh::ui::MergeTrackerNameFonts(*io.Fonts);
+    bmp.SizePixels = 26.f;
+    titleBmp = io.Fonts->AddFontDefaultBitmap(&bmp);
+    bmp.SizePixels = 39.f;
+    hugeBmp = io.Fonts->AddFontDefaultBitmap(&bmp);
+
+    ImFontConfig vec;
+    vec.PixelSnapH = true;
+    vec.SizePixels = 13.f;
+    bodyVec = io.Fonts->AddFontDefaultVector(&vec);
+    lh::ui::MergeTrackerNameFonts(*io.Fonts);
+    vec.SizePixels = 26.f;
+    titleVec = io.Fonts->AddFontDefaultVector(&vec);
+    vec.SizePixels = 39.f;
+    hugeVec = io.Fonts->AddFontDefaultVector(&vec);
+  }
+  const bool integerScale = std::fabs(k - std::round(k)) < 0.01f;
+  io.FontDefault = integerScale ? bodyBmp : bodyVec;
+  g_title = integerScale ? titleBmp : titleVec;
+  g_huge = integerScale ? hugeBmp : hugeVec;
   // Plain ImGui, with roomy frames: easy to hit with a laser pointer.
+  ImGui::GetStyle() = ImGuiStyle();
   ImGui::StyleColorsDark();
   ImGuiStyle& style = ImGui::GetStyle();
   style.WindowRounding = 0;
   style.FramePadding = ImVec2(8, 6);
   style.ItemSpacing = ImVec2(10, 8);
   style.WindowPadding = ImVec2(12, 12);
-  style.ScaleAllSizes(float(k));
-  lh::ui::ApplyTheme(float(k));
+  style.ScaleAllSizes(k);
+  style.FontScaleMain = k;
+  lh::ui::ApplyTheme(k);
   style.Colors[ImGuiCol_ChildBg] = lh::ui::CardColor();   // bordered panels are cards over the snow
 }
 
@@ -275,7 +289,7 @@ void Ui::Draw(float width, float height) {
                                          ImGuiWindowFlags_NoScrollbar);
   lh::ui::Snow(ImGui::GetWindowDrawList(), ImVec2(0, 0), ImVec2(width, height));
   ReplacedBanner();
-  const float statusHeight = ImGui::GetFrameHeightWithSpacing() + 4;
+  const float statusHeight = ImGui::GetFrameHeightWithSpacing() + 4 * lh::ui::Scale();
   const float body = ImGui::GetContentRegionAvail().y - statusHeight;
   Sidebar(body);
   ImGui::SameLine();
@@ -538,7 +552,15 @@ void Ui::StatusBar() {
     ImGui::TextDisabled("...");
     any = true;
   }
-  if (!any) ImGui::TextUnformatted("");
+  if (!any) {
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("");
+  }
+  if (!inVR_ && drawScale_) {
+    const float w = lh::ui::ScaleComboWidth();
+    ImGui::SameLine(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x - w));
+    drawScale_();
+  }
 }
 
 // ---- pages ----

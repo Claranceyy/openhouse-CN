@@ -218,6 +218,24 @@ struct UsbTransportTestAccess {
   }
   static RawCaptureWriter& Capture(UsbTransport& t) { return t.capture_; }
   static constexpr int kOpenDeadlineMs = UsbTransport::kOpenDeadlineMs;
+  // The first endpoint as a Watchman device that negotiates its radio protocol.
+  static void WantVersion(UsbTransport& t) { t.open_.front().wantVersion = true; }
+  static void Feed(UsbTransport& t, double now, const std::vector<uint8_t>& report) {
+    t.decoder_.OnReport(now, t.open_.front().info.ep, true, report.data(), report.size());
+  }
+  static void Wake(UsbTransport& t, double now) { t.WakeDarkDevice(t.open_.front(), now); }
+  static std::vector<int> QueuedLightModes(UsbTransport& t) {
+    std::lock_guard lock(t.hapticMutex_);
+    std::vector<int> out;
+    for (const auto& c : t.haptics_) out.push_back(c.opticalMode);
+    return out;
+  }
+  // The reader's retry of a request with no transition packet yet; the transition arriving.
+  static void Transition(UsbTransport& t, double now) {
+    const uint8_t transition[30] = {0x23, 0, 3, 0, 0xe2, 1};
+    t.decoder_.OnReport(now, t.open_.front().info.ep, true, transition, sizeof transition);
+    t.open_.front().versionRequestTime = 0;
+  }
 };
 }  // namespace lh::usb
 
@@ -273,6 +291,15 @@ std::vector<uint8_t> Stream(int slot, const std::vector<uint8_t>& frame) {   // 
   return r;
 }
 std::vector<uint8_t> Ident(int slot, uint32_t id) { return Stream(slot, IdentFrame(id)); }
+std::vector<uint8_t> Info(int firmware) {   // command 0x01's reply: "OHDG", the firmware, 8 slots
+  std::vector<uint8_t> r(64, 0);
+  r[0] = 0x01;
+  std::memcpy(r.data() + 3, "OHDG", 4);
+  r[7] = uint8_t(firmware);
+  r[8] = uint8_t(firmware >> 8);
+  r[63] = 8;
+  return r;
+}
 std::vector<uint8_t> Imu(int slot, uint8_t mark) {   // 'p': one IMU sample (17 bytes)
   std::vector<uint8_t> f(18, mark);
   f[0] = 'p';
@@ -508,6 +535,131 @@ TEST_F(Doorman, DonglesThatCantBeToldApartAreNotOpened) {
   Step();
   EXPECT_EQ(sink.Count("Doorman Dongle OHDG-TWIN opened"), 1u);
   EXPECT_NE(fake::Open("T1"), nullptr);
+}
+
+// A planner fed reports: `loss[d][k]` for dongle d, every channel of its home in use unless in `off[d]`.
+struct PlannerRun {
+  lh::usb::DoormanHomePlanner planner;
+  std::vector<std::string> serials{"A", "B"};
+  double t = 0;
+  std::vector<uint16_t> homes = planner.Homes(serials, 0);
+  std::vector<std::string> changes;
+  void Run(double seconds, const std::vector<std::array<uint8_t, 16>>& loss, const std::vector<uint16_t>& off = {}) {
+    for (double end = t + seconds; t < end; t += 2) {
+      for (size_t d = 0; d < serials.size(); ++d)
+        planner.Observe(serials[d], uint16_t(homes[d] & ~(d < off.size() ? off[d] : 0)), loss[d], t);
+      homes = planner.Homes(serials, t);
+      if (!planner.Change().empty()) changes.push_back(planner.Change());
+    }
+  }
+};
+std::array<uint8_t, 16> Flat(uint8_t pct) { std::array<uint8_t, 16> a; a.fill(pct); return a; }
+
+TEST(DoormanHomesPlan, ADongleShortOfGoodChannelsTakesASpareAndGivesBackItsWorst) {
+  PlannerRun r;
+  ASSERT_EQ(r.homes, (std::vector<uint16_t>{0x00FF, 0xFF00}));
+  // Wi-Fi on A's lower channels: A switched off 0-4 and has 3 good ones left; B is clean.
+  r.Run(60, {Flat(3), Flat(3)}, {0x001F, 0});
+  ASSERT_FALSE(r.changes.empty());
+  EXPECT_EQ(__builtin_popcount(r.homes[0]), 8);   // homes keep their size
+  EXPECT_EQ(__builtin_popcount(r.homes[1]), 8);
+  EXPECT_EQ(r.homes[0] & r.homes[1], 0);           // and never share a channel
+  EXPECT_NE(r.homes[0] & 0xFF00, 0);               // A has one of B's
+  EXPECT_NE(r.homes[1] & 0x001F, 0);               // B took one A had switched off
+  EXPECT_EQ(r.changes.size(), 1u);                 // with 4 good channels again, A is fine
+  const auto settled = r.homes;
+  r.Run(120, {Flat(3), Flat(3)}, {uint16_t(r.homes[0] & 0x001F), 0});   // what it gave back is B's now
+  EXPECT_EQ(r.changes.size(), 1u);
+  EXPECT_EQ(r.homes, settled);
+}
+
+TEST(DoormanHomesPlan, NothingMovesWhenEveryDongleHasEnoughOrLossIsEverywhere) {
+  PlannerRun fine;
+  fine.Run(120, {Flat(2), Flat(5)});
+  EXPECT_TRUE(fine.changes.empty());
+  EXPECT_EQ(fine.homes, (std::vector<uint16_t>{0x00FF, 0xFF00}));
+  PlannerRun full;   // a full link loses on every channel alike: more channels won't help
+  full.Run(120, {Flat(30), Flat(2)}, {0x0003, 0});
+  EXPECT_TRUE(full.changes.empty());
+}
+
+TEST(DoormanHomesPlan, OneDongleFarAwayLosingEverywhereIsNotShortOfChannels) {
+  PlannerRun r;   // A's devices are across the room: 15 % on every channel, none worse than the rest
+  r.Run(120, {Flat(15), Flat(2)});
+  EXPECT_TRUE(r.changes.empty());
+}
+
+TEST(DoormanHomesPlan, OneTwoThreeAndMoreDongles) {
+  EXPECT_EQ(lh::usb::DoormanHomes(0), (std::vector<uint16_t>{}));
+  EXPECT_EQ(lh::usb::DoormanHomes(1), (std::vector<uint16_t>{0xFFFF}));
+  EXPECT_EQ(lh::usb::DoormanHomes(2), (std::vector<uint16_t>{0x00FF, 0xFF00}));
+  EXPECT_EQ(lh::usb::DoormanHomes(3), (std::vector<uint16_t>{0x001F, 0x03E0, 0xFC00}));
+  EXPECT_EQ(lh::usb::DoormanHomes(4), (std::vector<uint16_t>{0x001F, 0x03E0, 0xFC00, 0x001F}));
+  for (int n = 2; n <= 3; ++n) {   // every channel used, none twice, at least 5 each
+    uint16_t all = 0;
+    for (uint16_t h : lh::usb::DoormanHomes(n)) {
+      EXPECT_EQ(all & h, 0);
+      all |= h;
+      EXPECT_GE(__builtin_popcount(h), 5);
+    }
+    EXPECT_EQ(all, 0xFFFF);
+  }
+}
+
+// The home (0x36) last sent on a dongle's command interface, or -1.
+int LastHome(const std::string& path) {
+  std::lock_guard lock(fake::m);
+  int home = -1;
+  for (const auto& h : fake::handles)
+    if (h->path == path)
+      for (const auto& w : h->written)
+        if (w.size() > 4 && w[1] == 0x36) home = w[3] | w[4] << 8;
+  return home;
+}
+
+TEST_F(Doorman, TwoDonglesSplitTheChannelsAndOneLeftGetsThemAllBack) {
+  Plug("A", L"TESTA");
+  Plug("B", L"TESTB");
+  Step();
+  EXPECT_EQ(LastHome("A0"), -1);   // not before its firmware is known
+  Queue("A0", Info(0x0030));
+  Queue("B0", Info(0x0030));
+  Step();
+  Step();
+  EXPECT_EQ(LastHome("A0"), 0xFFFF);   // no devices yet: nothing to split
+  EXPECT_EQ(LastHome("B0"), 0xFFFF);
+  Connect("A", 0, kA1, 0b1);
+  EXPECT_EQ(LastHome("A0"), 0xFFFF);   // the only one carrying a device
+  Connect("B", 0, kB1, 0b1);
+  Step();
+  EXPECT_EQ(LastHome("A0"), 0x00FF);
+  EXPECT_EQ(LastHome("B0"), 0xFF00);
+  EXPECT_EQ(sink.Count("2 Doorman Dongles: radio channels split between them"), 1u);
+  EXPECT_EQ(Sent("A0", 0x36), 2u);   // all 16, then its half: told once each, not every pass
+
+  fake::Unplug("A");
+  Step();
+  Step();
+  EXPECT_EQ(LastHome("B0"), 0xFFFF);
+}
+
+TEST_F(Doorman, ADongleTooOldForItsShareKeepsAllChannelsAndIsReported) {
+  Plug("A", L"TESTA");
+  Plug("B", L"TESTB");
+  Plug("C", L"TESTC");
+  Step();
+  Queue("A0", Info(0x0030));
+  Queue("B0", Info(0x002F));   // takes homes of 8 or more, not 5
+  Queue("C0", Info(0x0030));
+  Step();
+  Connect("A", 0, kA1, 0b1);
+  Connect("B", 0, kB1, 0b1);
+  Connect("C", 0, kA2, 0b1);
+  Step();
+  EXPECT_EQ(LastHome("A0"), 0x001F);
+  EXPECT_EQ(LastHome("B0"), 0xFFFF);
+  EXPECT_EQ(LastHome("C0"), 0xFC00);
+  EXPECT_EQ(sink.CountContaining("Doorman Dongle OHDG-TESTB: its firmware can't take its share"), 1u);
 }
 
 TEST_F(Doorman, UnplugOneOfTwoKeepsTheOtherAndReplugReopensIt) {
@@ -1056,4 +1208,89 @@ TEST_F(Doorman, AWedgedWatchmanDongleDoesNotHoldUpStopping) {
   std::this_thread::sleep_for(std::chrono::milliseconds(300));
   std::lock_guard lock(fake::m);
   EXPECT_EQ(fake::featureHanging, 0);
+}
+
+namespace {
+// Radio reports (0x23: one Wv2 packet) of a Watchman device in protocol 1.
+std::vector<uint8_t> Wv2(uint8_t msb, uint8_t lsb, uint8_t flags, std::vector<uint8_t> body) {
+  std::vector<uint8_t> r(30, 0);
+  r[0] = 0x23;
+  r[1] = msb;
+  r[2] = uint8_t(2 + body.size());
+  r[3] = lsb;
+  r[4] = flags;
+  for (size_t i = 0; i < body.size(); ++i) r[5 + i] = body[i];
+  return r;
+}
+std::vector<uint8_t> Announce2(uint8_t msb, uint8_t lsb) { return Wv2(msb, lsb, 0x40, {0x30, 1, 0}); }   // 2.0 light, controller 0
+std::vector<uint8_t> ImuOnly(uint8_t msb, uint8_t lsb) {
+  std::vector<uint8_t> body(13, 0);
+  body[0] = lsb;   // stamp byte
+  body[5] = 0x10;  // some gravity
+  return Wv2(msb, lsb, 0x80, body);
+}
+std::vector<uint8_t> ImuAndLight(uint8_t msb, uint8_t lsb) {
+  std::vector<uint8_t> body(13, 0);
+  body[0] = lsb;
+  body[5] = 0x10;
+  for (uint8_t b : {0x01, 0x0a, 0x00, 0x00, 0x18}) body.push_back(b);   // channel 0, one sensor word
+  return Wv2(msb, lsb, 0x90, body);
+}
+size_t VersionRequests(const std::string& path) {
+  std::lock_guard lock(fake::m);
+  size_t n = 0;
+  for (const auto& h : fake::handles)
+    if (h->path == path)
+      for (const auto& w : h->written) n += w.size() > 1 && w[0] == 0xff && w[1] == 0x87;
+  return n;
+}
+}  // namespace
+
+// A Watchman device that announces 2.0 light mode and sends IMU but no light (a device-info
+// request from another program as it connected): its protocol is requested again after 3 s, its
+// light mode cycled the next time, less and less often; light coming back starts that over, and
+// a device sending nothing isn't asked.
+TEST_F(Doorman, AWatchmanDeviceSendingImuButNoLightIsAskedForItsProtocolAgain) {
+  fake::plugged.push_back({"W0", L"WDONGLE", 0, 0, 0x28de, 0x2101});
+  Access::AddEndpoint(*transport, "W0", "LHR-0000D001");
+  Access::WantVersion(*transport);
+  Access::Transition(*transport, 0.0);
+  Access::Feed(*transport, 0.0, Announce2(1, 0));
+  double now = 0;
+  uint8_t lsb = 1;
+  // IMU only, 250 Hz, checked every 10 ms (a reader pass).
+  const auto run = [&](double until, bool light) {
+    for (; now < until; now += 0.01) {
+      Access::Feed(*transport, now, light ? ImuAndLight(1, lsb) : ImuOnly(1, lsb));
+      ++lsb;
+      Access::Wake(*transport, now);
+    }
+  };
+  run(2.9, false);
+  EXPECT_EQ(VersionRequests("W0"), 0u) << "asked before 3 s";
+  run(3.2, false);
+  EXPECT_EQ(VersionRequests("W0"), 1u);
+  EXPECT_GT(sink.CountContaining("LHR-0000D001: no light for 3 s while its IMU keeps coming"), 0u);
+  Access::Transition(*transport, now);
+  Access::Feed(*transport, now, Announce2(1, lsb++));
+  run(8.0, false);
+  EXPECT_TRUE(Access::QueuedLightModes(*transport).empty()) << "the second try waits longer (6 s)";
+  run(9.5, false);
+  EXPECT_EQ(VersionRequests("W0"), 1u);
+  EXPECT_EQ(Access::QueuedLightModes(*transport), (std::vector<int>{0, 1})) << "1.0 mode, then back to 2.0";
+  EXPECT_GT(sink.CountContaining("cycling its light mode"), 0u);
+  run(21.5, false);
+  EXPECT_EQ(VersionRequests("W0"), 2u) << "then a request again, 12 s later";
+  Access::Transition(*transport, now);
+  Access::Feed(*transport, now, Announce2(1, lsb++));
+  // Light again: the backoff starts over, so the next dark spell is asked about after 3 s again.
+  run(22.0, true);
+  run(24.8, false);
+  EXPECT_EQ(VersionRequests("W0"), 2u);
+  run(25.2, false);
+  EXPECT_EQ(VersionRequests("W0"), 3u);
+  // Neither IMU nor light (off, out of range): not asked.
+  const size_t before = VersionRequests("W0");
+  for (double t = now; t < now + 30; t += 0.5) Access::Wake(*transport, t);
+  EXPECT_EQ(VersionRequests("W0"), before);
 }

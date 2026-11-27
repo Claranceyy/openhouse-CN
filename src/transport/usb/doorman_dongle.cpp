@@ -26,7 +26,7 @@ constexpr uint16_t kVid = 0x6767, kPid = 0x0727;
 constexpr double kExtraLatency = 0.0015;
 constexpr double kFeatureTimeout = 0.15;
 
-constexpr uint8_t kCmdRadios = 0x38, kCmdRejoin = 0x33, kCmdSetName = 0x34, kCmdGetName = 0x35, kCmdPacked = 0x37, kCmdInfo = 0x01;
+constexpr uint8_t kCmdChannels = 0x27, kCmdHome = 0x36, kCmdRadios = 0x38, kCmdRejoin = 0x33, kCmdSetName = 0x34, kCmdGetName = 0x35, kCmdPacked = 0x37, kCmdInfo = 0x01;
 constexpr size_t kNameMax = 59;   // what the dongle keeps (link.c DML_NAME_MAX)
 constexpr uint8_t kCmdDown = 0x21, kCmdStats = 0x23, kCmdPair = 0x24, kCmdSlots = 0x25, kCmdLive = 0x29, kCmdIdent = 0x2A;
 
@@ -188,6 +188,7 @@ bool DoormanDongle::TakeOpened() {
   const uint8_t on = 1;
   Send(kCmdPacked, &on, 1);   // full stream reports; a dongle without it ignores the command and sends whole frames
   slotCount_ = 8;
+  sentHome_ = -1;               // it may still have a home from before (until it's unplugged): told again
   Send(kCmdInfo, nullptr, 0);   // how many slots it has
   nextLive_ = 0;
   log_(LogLevel::Info, "Doorman Dongle " + serial_ + " opened");
@@ -298,9 +299,38 @@ void DoormanDongle::Downlink(int slot, const uint8_t* frame, size_t n) {
   Send(kCmdDown, a, 2 + std::min<size_t>(n, 60));
 }
 
+bool DoormanDongle::TakeChannels(ChannelReport* out) {
+  std::lock_guard lock(channelsMutex_);
+  if (!channels_) return false;
+  *out = *channels_;
+  channels_.reset();
+  return true;
+}
+
+bool DoormanDongle::TakesHome(int channels) const {
+  const int fw = firmware_;
+  return fw >= 0x0030 || (fw >= 0x002F && channels >= 8);
+}
+
 void DoormanDongle::Pump(double now) {
   if (!dev_ && !TakeOpened()) return;   // the transport opens it again when it's listed again
   if (writeFailed_) { Drop(); return; }   // unplugged: the writer saw it first
+  if (watchChannels_ && firmware_ >= 0x002F && now >= nextChannels_) {
+    nextChannels_ = now + 2.0;   // the dongle's own round
+    Send(kCmdChannels, nullptr, 0);
+  }
+  if (firmware_ >= 0x002F && int(wantHome_) != sentHome_) {
+    uint16_t home = wantHome_;
+    int channels = 0;
+    for (int k = 0; k < 16; ++k) channels += (home >> k) & 1;
+    if (!TakesHome(channels)) home = 0xFFFF;   // an older dongle: the transport warns about it
+    const uint8_t args[2] = {uint8_t(home), uint8_t(home >> 8)};
+    Send(kCmdHome, args, 2);
+    sentHome_ = wantHome_;
+    char b[96];
+    std::snprintf(b, sizeof b, ": home channels %04X", unsigned(home));
+    log_(LogLevel::Info, "Doorman Dongle " + serial_ + b);
+  }
   if (now >= nextLive_) {
     nextLive_ = now + 0.25;
     for (int page = 0; page < 2; ++page) {   // 6 slots per reply
@@ -589,6 +619,14 @@ void DoormanDongle::OnReport(double t, const uint8_t* r, int n, bool last) {
       log_(DongleOutdated(firmware) ? LogLevel::Warn : LogLevel::Info, "Doorman Dongle " + serial_ + b);
       if (firmware >= 0x002C) Send(kCmdRadios, nullptr, 0);   // the radios it remembers, devices off too
     }
+  } else if (r[0] == kCmdChannels && r[2] == 0) {
+    ChannelReport c;
+    c.mask = uint16_t(d[0] | d[1] << 8);
+    for (int k = 0; k < kDoormanChannels; ++k) c.loss[size_t(k)] = d[18 + k];
+    std::lock_guard lock(channelsMutex_);
+    channels_ = c;
+  } else if (r[0] == kCmdHome && r[2] != 0) {
+    log_(LogLevel::Warn, "Doorman Dongle " + serial_ + ": home channels refused (status " + std::to_string(r[2]) + ")");
   } else if (r[0] == kCmdRadios && r[2] == 0) {
     const int count = std::min<int>(d[0], kSlots);
     for (int i = 0; i < count; ++i) {

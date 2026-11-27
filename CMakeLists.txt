@@ -150,7 +150,8 @@ if(LH_BUILD_USB)
     src/transport/usb/wireless_decoder.cpp
     src/transport/usb/usb_transport.cpp
     src/transport/usb/hid_list.cpp
-    src/transport/usb/doorman_dongle.cpp)
+    src/transport/usb/doorman_dongle.cpp
+    src/transport/usb/doorman_homes.cpp)
   add_library(lh::usb ALIAS lh_usb)
   if(WIN32)
     target_link_libraries(lh_usb PRIVATE setupapi cfgmgr32 hid)   # hid_list.cpp: listing without device I/O

@@ -248,9 +248,14 @@ bool RoomMap::ImportSteamDatabase(const std::string& text, std::string* error) {
           base.serial = b.at("base_serial_number").get<uint32_t>();
           base.worldFromBase = worldFromGlobal * baseFromGlobal.inverse();
           const double variance = target.value("variance", 0.0);
-          base.positionVariance = std::max(variance, 1e-6);
-          base.rotationVariance = std::max(variance, 1e-6);
           base.origin = variance == 0.0 && p[4] == 0 && p[5] == 0 && p[6] == 0;
+          // The other bases' poses: SteamVR's, maybe from long ago (bases moved since, a room from
+          // another tool), with SteamVR's own variance of about a millimetre. Trusted that much, a
+          // stale one was fought instead of corrected: the devices refused its light and made no
+          // keyframes to correct it with. A starting guess instead, refined by the light like a
+          // base being learned (and the room isn't settled until it is).
+          base.positionVariance = base.origin ? std::max(variance, 1e-6) : std::max(variance, kImportedPositionVariance);
+          base.rotationVariance = base.origin ? std::max(variance, 1e-6) : std::max(variance, kImportedRotationVariance);
           // SteamVR's heading, origin and floor are kept; its level (the stock driver's, from Valve's
           // accelerometers, maybe years ago) is no better than a base's own accelerometer, so the
           // devices level the room as they do a new one (RefineOriginTilt) before it's settled.

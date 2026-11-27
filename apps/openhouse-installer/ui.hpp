@@ -61,9 +61,15 @@ template <class T>
 class Watcher {
  public:
   ~Watcher() { Stop(); }
-  void Start(std::function<T()> look, double seconds) {
+  // keepLast: until its first look, it shows what the last run had (the home page's dongle
+  // check: back on the page, its badge was empty for the length of a scan).
+  void Start(std::function<T()> look, double seconds, bool keepLast = false) {
     Stop();
     auto state = std::make_shared<State>();
+    if (keepLast && haveLast_) {
+      state->value = last_;
+      state->have = true;
+    }
     state_ = state;
     std::thread([state, look, seconds] {
       t_scan = true;
@@ -80,7 +86,14 @@ class Watcher {
     }).detach();
   }
   void Stop() {
-    if (state_) state_->stop = true;
+    if (state_) {
+      state_->stop = true;
+      std::lock_guard l(state_->m);
+      if (state_->have) {
+        last_ = state_->value;
+        haveLast_ = true;
+      }
+    }
     state_.reset();
   }
   T Value() const {
@@ -97,13 +110,16 @@ class Watcher {
     T value{};
   };
   std::shared_ptr<State> state_;
+  T last_{};
+  bool haveLast_ = false;
 };
 
 class Ui {
  public:
   Ui();
-  static void SetUpImGui();
+  static void SetUpImGui(float k = 1.0f);
   void SetLogo(uint64_t texture) { logo_ = texture; }
+  void SetScaleDrawer(std::function<void()> drawer) { drawScale_ = std::move(drawer); }
   void Draw(float width, float height);
   // Testing (OPENHOUSE_INSTALLER_PAGE): the page shown first. "kuroshin": its DFU instructions.
   void ShowForTest(const std::string& page);
@@ -153,6 +169,7 @@ class Ui {
 
   Page page_ = Page::Home;
   uint64_t logo_ = 0;
+  std::function<void()> drawScale_;
   SteamVR steamvr_;
   DriverStatus status_;
   bool askSteamVR_ = false;
@@ -189,7 +206,9 @@ class Ui {
   bool sawUnplug_ = false;
 
   // Dongle flow
-  enum class DongleStep { Board, Detect, Flashing, Done } dongleStep_ = DongleStep::Board;
+  enum class DongleStep { Board, IndexWarning, Detect, Flashing, Done } dongleStep_ = DongleStep::Board;
+  bool confirmedIndex_ = false;        // the Index warning accepted
+  bool confirmedIndexFlash_ = false;   // and again when flashing it
   int dongleBoard_ = 0;  // board picked: 0 UF2, 1 Holyiot 21017, 2 PCA10059 (DoormanDongleInfo::board)
   struct DongleSeen {
     std::vector<Uf2Drive> drives;
