@@ -16,7 +16,7 @@ TEST(I18nTest, BuiltinDictionaryLoadsAndTranslatesCoreStrings) {
 }
 
 TEST(I18nTest, ExactAndFormatAndSafetyValidation) {
-  lh::i18n::LoadJsonForTest(R"({
+  lh::i18n::LoadJsonForTest(R"json({
     "exact": {
       "Ready": "就绪",
       "Tracking": "追踪中",
@@ -31,7 +31,7 @@ TEST(I18nTest, ExactAndFormatAndSafetyValidation) {
       { "match": "Room: {@1} ({2} / {3} placed)", "replace": "房间：{@1}（已定位 {2} / {3}）" },
       { "match": "Placed ({1} mm)", "replace": "已定位 ({1} mm)" }
     ]
-  })");
+  })json");
 
   // Exact
   EXPECT_EQ(lh::i18n::Translate("Hello"), "你好");
