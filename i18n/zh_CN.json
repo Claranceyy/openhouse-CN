@@ -746,7 +746,15 @@
     "Running_OutOfRange": "超出范围",
     "Calibrating_InProgress": "校准中",
     "Calibrating_OutOfRange": "校准超出范围",
-    "Uninitialized": "未初始化"
+    "Uninitialized": "未初始化",
+    "Scale": "缩放",
+    "Larger than this display's workarea": "超出当前显示器可用工作区域",
+    "Window scale (Ctrl +/- / Ctrl 0)": "窗口缩放（Ctrl +/- / Ctrl 0）",
+    "ONLY for the Valve Index!": "仅限 Valve Index 头显！",
+    "This is not fully tested and will probably brick any headset other than the Valve Index.\nDo not use it if you are not certain you want to flash your Index, or if you use a wired headset other than the Index!": "该功能尚未经过完整测试，刷入非 Valve Index 头显极有可能导致变砖。\n如果你不确定是否要给 Index 刷机，或你使用的是其他有线头显，请勿使用！",
+    "I understand, this is a Valve Index": "我已知晓风险，确认此设备为 Valve Index",
+    "Not fully tested: it will probably brick any headset other than the Valve Index.": "尚未经过完整测试：刷入非 Valve Index 头显极有可能导致变砖。",
+    "I understand, flash my Valve Index": "我已知晓风险，确认刷写我的 Valve Index"
   },
   "format": {
     "%s available": "发现新版本 %s",
@@ -991,6 +999,7 @@
     { "match": "Couldn't make a temporary folder: {1}", "replace": "无法创建临时文件夹：{1}" },
     { "match": "couldn't read {1}", "replace": "无法读取 {1}" },
     { "match": "openhouse: {1} slots, {2} joined", "replace": "openhouse：{1} 个槽位，已连接 {2} 台" },
-    { "match": "openhouse: {1} slot, {2} joined", "replace": "openhouse：{1} 个槽位，已连接 {2} 台" }
+    { "match": "openhouse: {1} slot, {2} joined", "replace": "openhouse：{1} 个槽位，已连接 {2} 台" },
+    { "match": "Auto ({1}%)", "replace": "自动 ({1}%)" }
   ]
 }

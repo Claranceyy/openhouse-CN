@@ -31,6 +31,7 @@ UI_FILES = [
     "apps/openhouse-viewer/views.cpp",
     "apps/openhouse-viewer/log_view.cpp",
     "apps/lhviz/main.cpp",
+    "src/common/ui_scale.hpp",
 ]
 
 PRINTF_SPEC_RE = re.compile(

@@ -3185,14 +3185,10 @@ static float GetExpectedContextFontSize(ImGuiContext* ctx)
 // Prefer calling AddFontDefaultVector() or AddFontDefaultBitmap() based on your own logic.
 ImFont* ImFontAtlas::AddFontDefault(const ImFontConfig* font_cfg)
 {
-    ImFont* font = (OwnerContext == NULL || GetExpectedContextFontSize(OwnerContext) >= 15.0f)
-        ? AddFontDefaultVector(font_cfg)
-        : AddFontDefaultBitmap(font_cfg);
-#ifdef OPENHOUSE_I18N
-    if (font != NULL)
-        lh::i18n::MergeCjkFallbackFont(*this, font_cfg);
-#endif
-    return font;
+    if (OwnerContext == NULL || GetExpectedContextFontSize(OwnerContext) >= 15.0f)
+        return AddFontDefaultVector(font_cfg);
+    else
+        return AddFontDefaultBitmap(font_cfg);
 }
 
 // Load embedded ProggyClean.ttf. Default size 13, disable oversampling.
@@ -3215,7 +3211,12 @@ ImFont* ImFontAtlas::AddFontDefaultBitmap(const ImFontConfig* font_cfg_template)
 
     int ttf_compressed_size = 0;
     const char* ttf_compressed = GetDefaultCompressedFontDataProggyClean(&ttf_compressed_size);
-    return AddFontFromMemoryCompressedTTF(ttf_compressed, ttf_compressed_size, font_cfg.SizePixels, &font_cfg);
+    ImFont* font = AddFontFromMemoryCompressedTTF(ttf_compressed, ttf_compressed_size, font_cfg.SizePixels, &font_cfg);
+#ifdef OPENHOUSE_I18N
+    if (font != NULL)
+        lh::i18n::MergeCjkFallbackFont(*this, font_cfg_template);
+#endif
+    return font;
 #else
     IM_ASSERT(0 && "Function is disabled in this build.");
     IM_UNUSED(font_cfg_template);
@@ -3243,7 +3244,12 @@ ImFont* ImFontAtlas::AddFontDefaultVector(const ImFontConfig* font_cfg_template)
 
     int ttf_compressed_size = 0;
     const char* ttf_compressed = GetDefaultCompressedFontDataProggyForever(&ttf_compressed_size);
-    return AddFontFromMemoryCompressedTTF(ttf_compressed, ttf_compressed_size, font_cfg.SizePixels, &font_cfg);
+    ImFont* font = AddFontFromMemoryCompressedTTF(ttf_compressed, ttf_compressed_size, font_cfg.SizePixels, &font_cfg);
+#ifdef OPENHOUSE_I18N
+    if (font != NULL)
+        lh::i18n::MergeCjkFallbackFont(*this, font_cfg_template);
+#endif
+    return font;
 #else
     IM_ASSERT(0 && "Function is disabled in this build.");
     IM_UNUSED(font_cfg_template);
