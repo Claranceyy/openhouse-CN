@@ -81,7 +81,9 @@ class ReportDecoder {
     std::unique_ptr<ButtonsReportParser> buttons;  // EndpointKind::Buttons
     std::unique_ptr<WirelessReportParser> wireless;
   };
-  void ResetWireless(Ep& ep);
+  // `sameDevice`: a radio gap, not an off notification. The device is still the one that
+  // announced its sub-protocols, so the new parser starts from them (see SeedSubProtocols).
+  void ResetWireless(Ep& ep, bool sameDevice = false);
   IInputSink* sink_;
   std::map<std::string, std::shared_ptr<DeviceState>> devices_;
   std::map<uint16_t, Ep> eps_;
