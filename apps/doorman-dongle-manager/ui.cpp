@@ -14,6 +14,7 @@
 
 #include "common/dongle_bank.hpp"
 #include "common/nordic_dfu.hpp"
+#include "common/ui_scale.hpp"
 #include "common/ui_theme.hpp"
 #include "lh/telemetry.hpp"
 #include "lh/version.hpp"
@@ -442,7 +443,7 @@ void Ui::StatusBar() {
   if (!toast_.empty() && now_ < toastUntil_) ImGui::TextColored(toastError_ ? kBad : kGood, "%s", toast_.c_str());
   else ImGui::TextDisabled("openhouse %s", lh::kVersion);
   if (drawScale_) {
-    const float w = ImGui::GetFontSize() * 8.2f;
+    const float w = lh::ui::ScaleComboWidth();
     ImGui::SameLine(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x - w));
     drawScale_();
   }

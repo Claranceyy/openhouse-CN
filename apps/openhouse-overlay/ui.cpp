@@ -16,6 +16,7 @@
 
 #include "common/tracker_names.hpp"
 #include "common/ui_name_fonts.hpp"
+#include "common/ui_scale.hpp"
 #include "common/ui_theme.hpp"
 #include "lh/bug_report.hpp"
 #include "lh/version.hpp"
@@ -556,7 +557,7 @@ void Ui::StatusBar() {
     ImGui::TextUnformatted("");
   }
   if (!inVR_ && drawScale_) {
-    const float w = ImGui::GetFontSize() * 8.2f;
+    const float w = lh::ui::ScaleComboWidth();
     ImGui::SameLine(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x - w));
     drawScale_();
   }

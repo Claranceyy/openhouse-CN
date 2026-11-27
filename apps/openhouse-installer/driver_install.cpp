@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <fstream>
+#include <mutex>
 #include <stdexcept>
 #include <vector>
 
@@ -330,8 +331,25 @@ DriverStatus ReadStatus(const fs::path& steamvr) {
   const Paths p = MakePaths(steamvr);
   std::string text;
   std::error_code ec;
-  st.driverFound = ReadFile(p.target, &text);
   st.backup = fs::exists(p.backup, ec);
+  // The driver is read whole to find its markers, on every page the installer opens: a build with
+  // debug info is 150 MB, a quarter of a second per click. Read again only when it changed.
+  static std::mutex cacheMutex;
+  static fs::path cachedPath;
+  static std::uintmax_t cachedSize = 0;
+  static fs::file_time_type cachedTime{};
+  static DriverStatus cached;
+  const std::uintmax_t size = fs::file_size(p.target, ec);
+  const fs::file_time_type time = ec ? fs::file_time_type{} : fs::last_write_time(p.target, ec);
+  if (!ec) {
+    std::lock_guard lock(cacheMutex);
+    if (cachedPath == p.target && cachedSize == size && cachedTime == time) {
+      DriverStatus hit = cached;
+      hit.backup = st.backup;
+      return hit;
+    }
+  }
+  st.driverFound = ReadFile(p.target, &text);
   if (!st.driverFound) return st;
   st.openhouse = text.find(kMarker) != std::string::npos;
   if (const size_t at = text.find(kVersionMarker); at != std::string::npos) {
@@ -343,6 +361,13 @@ DriverStatus ReadStatus(const fs::path& steamvr) {
     const size_t start = at + std::char_traits<char>::length(kBuildTimeMarker);
     const size_t end = text.find(';', start);
     if (end != std::string::npos && end - start < 20) st.buildTime = std::atoll(text.substr(start, end - start).c_str());
+  }
+  if (!ec) {
+    std::lock_guard lock(cacheMutex);
+    cachedPath = p.target;
+    cachedSize = size;
+    cachedTime = time;
+    cached = st;
   }
   return st;
 }

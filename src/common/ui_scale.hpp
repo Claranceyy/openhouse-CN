@@ -262,6 +262,13 @@ inline bool HandleScaleShortcuts(ScaleChoice& choice, float activeScale, int bas
   return false;
 }
 
+// The scale selector's width: its longest preview, the arrow button and the padding (a fixed 8.2
+// font sizes clipped "Auto (100%)"). The apps right-align it by this too.
+inline float ScaleComboWidth() {
+  const ImGuiStyle& st = ImGui::GetStyle();
+  return ImGui::CalcTextSize("Auto (300%)").x + st.FramePadding.x * 2 + ImGui::GetFrameHeight() + st.ItemInnerSpacing.x;
+}
+
 // Compact scale selector combo; returns true if the user picked a new scale choice.
 inline bool DrawScaleCombo(const char* id, ScaleChoice& choice, float activeScale, int baseW, int baseH, GLFWwindow* win) {
   const float autoScale = AutoScaleFor(baseW, baseH, win);
@@ -271,7 +278,7 @@ inline bool DrawScaleCombo(const char* id, ScaleChoice& choice, float activeScal
   else std::snprintf(preview, sizeof preview, "%d%%", int(std::lround(activeScale * 100.f)));
 
   bool changed = false;
-  ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8.2f);
+  ImGui::SetNextItemWidth(ScaleComboWidth());
   if (ImGui::BeginCombo(id, preview, ImGuiComboFlags_HeightLarge)) {
     char autoLabel[40];
     std::snprintf(autoLabel, sizeof autoLabel, "Auto (%d%%)", int(std::lround(autoScale * 100.f)));

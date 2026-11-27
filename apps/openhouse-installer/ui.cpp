@@ -19,6 +19,7 @@
 
 #include "common/dongle_bank.hpp"
 #include "common/nordic_dfu.hpp"
+#include "common/ui_scale.hpp"
 #include "common/ui_theme.hpp"
 #include "lh/github.hpp"
 #include "lh/version.hpp"
@@ -842,6 +843,7 @@ void Ui::Go(Page page) {
   if (!job_.Running()) job_.Reset();
   page_ = page;
   checked_.clear();
+  if (page == Page::Home) ReleaseDeviceHandles();
   RefreshStatus();
   installAction_ = InstallAction();
   switch (page) {
@@ -947,7 +949,7 @@ void Ui::Header() {
   ImGui::TextColored(kMuted, "Installer v%s", lh::kVersion);
   ImGui::EndGroup();
   if (drawScale_) {
-    const float w = ImGui::GetFontSize() * 8.2f;
+    const float w = lh::ui::ScaleComboWidth();
     ImGui::SameLine(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x - w));
     drawScale_();
   }
@@ -1127,7 +1129,7 @@ void Ui::Home() {
   Prompt("What would you like to do?");
   // Doorman Dongles on other firmware than this package's.
   if (!homeWatching_) {
-    homeDongles_.Start(FindDongleUpdates, 5.0);
+    homeDongles_.Start(FindDongleUpdates, 5.0, true);
     homeWatching_ = true;
   }
   int outdated = 0;
@@ -1312,7 +1314,7 @@ void Ui::StartAutoUninstall() {
 // After installing: Doorman Dongles on older firmware than this package's.
 void Ui::DongleUpdateOffer() {
   if (!homeWatching_) {
-    homeDongles_.Start(FindDongleUpdates, 5.0);
+    homeDongles_.Start(FindDongleUpdates, 5.0, true);
     homeWatching_ = true;
   }
   int outdated = 0;
@@ -2216,7 +2218,7 @@ void Ui::DongleUpdatePick() {
   Title("Update Dongles");
   if (autoInstall_) RuntimesClosed();   // --dongles: VR closes from the start (the user agreed in the overlay)
   if (!homeWatching_) {
-    homeDongles_.Start(FindDongleUpdates, 5.0);
+    homeDongles_.Start(FindDongleUpdates, 5.0, true);
     homeWatching_ = true;
   }
   Prompt("Select the dongle");

@@ -61,9 +61,15 @@ template <class T>
 class Watcher {
  public:
   ~Watcher() { Stop(); }
-  void Start(std::function<T()> look, double seconds) {
+  // keepLast: until its first look, it shows what the last run had (the home page's dongle
+  // check: back on the page, its badge was empty for the length of a scan).
+  void Start(std::function<T()> look, double seconds, bool keepLast = false) {
     Stop();
     auto state = std::make_shared<State>();
+    if (keepLast && haveLast_) {
+      state->value = last_;
+      state->have = true;
+    }
     state_ = state;
     std::thread([state, look, seconds] {
       t_scan = true;
@@ -80,7 +86,14 @@ class Watcher {
     }).detach();
   }
   void Stop() {
-    if (state_) state_->stop = true;
+    if (state_) {
+      state_->stop = true;
+      std::lock_guard l(state_->m);
+      if (state_->have) {
+        last_ = state_->value;
+        haveLast_ = true;
+      }
+    }
     state_.reset();
   }
   T Value() const {
@@ -97,6 +110,8 @@ class Watcher {
     T value{};
   };
   std::shared_ptr<State> state_;
+  T last_{};
+  bool haveLast_ = false;
 };
 
 class Ui {
