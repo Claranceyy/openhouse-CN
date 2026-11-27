@@ -178,7 +178,18 @@ class UsbTransport {
     double kBytesPerSec = 0, reportsPerSec = 0;
     // A receiver that doesn't answer the check is asked again until checkUntil, from nextCheck.
     double checkUntil = 0, nextCheck = 0;
+    // WakeDarkDevice: when its light and IMU last came (the parser's packet counts as last
+    // seen), and the protocol requests made since its light stopped.
+    double lightAt = 0, imuAt = 0, lastWake = 0;
+    uint64_t lightPackets = 0, imuPackets = 0;
+    int wakes = 0;
   };
+  // A wireless device sending IMU but no light at all, for seconds on end, is asked for its radio
+  // protocol again: a device-info request (ff 83) reaching it as it connects, from another program
+  // (Steam's watchdog) or ours, leaves it like that, announcing 2.0 light mode and sending none,
+  // until it is switched off and on (a request is what it takes, as after the device check). Asked
+  // after 3 s, then backing off to once a minute, so one lying in a drawer costs nothing.
+  void WakeDarkDevice(Open& o, double now);
   enum class OpenResult { Failed, Idle, Ready };
   // Opens and sets up one enumerated HID interface (Start and hotplug).
   OpenResult OpenEndpoint(const lh::usb::HidEntry& d, Open* out);

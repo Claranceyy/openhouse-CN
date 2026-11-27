@@ -252,7 +252,9 @@ bool WirelessReportParser::DecodePacket(const uint8_t* pkt, int64_t* imuTicks) {
     version_ = pkt_.newVersion;  // "device switched to report protocol %d" — rest of packet dropped
     return true;
   }
+  if (!pkt_.lh2.empty() || !pkt_.pulses.empty()) ++lightPackets_;
   if (pkt_.hasImu) {
+    ++imuPackets_;
     const int64_t t = dev_->ticks.Unwrap(pkt_.imuTs, 32);
     *imuTicks = t;
     if (imu_.IsNew(t)) imu_.Emit(pkt_.imuRaw, t);

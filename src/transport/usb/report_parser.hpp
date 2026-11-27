@@ -80,9 +80,16 @@ class WirelessReportParser {
   // After sending the "request protocol version" feature report (0x3cc9a0) the
   // endpoint waits (version 2) for the device's transition packet.
   void SetPendingVersionRequest() { version_ = 2; }
+  // Packets decoded with light (1.0 pulses or 2.0 words), and with IMU: a device that keeps
+  // sending IMU and no light at all (UsbTransport: WakeDarkDevice).
+  uint64_t LightPackets() const { return lightPackets_; }
+  uint64_t ImuPackets() const { return imuPackets_; }
+  // The light mode (optical sub-protocol) the device last announced: 0 1.0, 1 2.0, 0xff none yet.
+  int OpticalSub() const { return version_ == 1 ? wv2_.opticalSub : 0xff; }
 
  private:
   bool DecodePacket(const uint8_t* pkt, int64_t* imuTicks);
+  uint64_t lightPackets_ = 0, imuPackets_ = 0;
   std::shared_ptr<DeviceState> dev_;
   IInputSink* sink_;
   ImuEmitter imu_;

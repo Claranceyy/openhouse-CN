@@ -471,6 +471,7 @@ void DeviceTracker::OnAcquired() {
     calibratedLogged_ = seed.calibrated;
   }
   updatesAtAcquire_ = filter_->Filter().updateCount;
+  acquiredWithCarry_ = carry_.has_value();
   char text[200];
   std::snprintf(text, sizeof text, "----- %s base %08X distance %.2fm%s%s -----", hadTrack_ ? "REACQUIRED" : "BOOTSTRAPPED",
                 primary, BaseFromImu(f.x).translation().norm(), base ? " (located)" : "",
@@ -659,6 +660,7 @@ void DeviceTracker::CheckHealth() {
                     "base %08X's light keeps contradicting the pose from %08X: reacquiring on %08X (attempt %d)",
                     on, primary, on, reacquireBurst_ + 1);
       Log(text);
+      if (contradictions_.size() < 16) contradictions_.emplace_back(primary, on);
       const auto& f = filter_->Filter();
       if (f.updateCount > 200 && f.CalibrationHealthy()) carry_ = f;
       ResetFilter();
@@ -768,6 +770,18 @@ void DeviceTracker::CheckHealth() {
       else carry_.reset();
     } else if (f.updateCount > 200) {
       carry_ = f;
+    }
+    // Not stock: kept that way, a carried calibration the light doesn't fit never goes. Each
+    // acquisition from it refused the light, lost it before converging, and carried the same one
+    // into the next: four trackers lost every 2-3 s for minutes, while a replay of their light
+    // from a fresh start tracked throughout. A few such losses in a row and it's dropped.
+    const bool quickLoss = acquiredWithCarry_ && f.updateCount < updatesAtAcquire_ + 200;
+    carryStrikes_ = quickLoss ? carryStrikes_ + 1 : 0;
+    if (carryStrikes_ >= kCarryStrikes && carry_) {
+      Log("lost again soon after every reacquisition with its carried IMU calibration: starting from a fresh one");
+      carry_.reset();
+      calm_.reset();
+      carryStrikes_ = 0;
     }
   } else {
     // Never reseed the very calibration rejected by HealthCheck: that creates

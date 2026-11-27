@@ -591,6 +591,42 @@ void UsbTransport::RequestVersion(Open& o) {
   RequestProtocolVersion(o.dev, wirelessProtocol_);
 }
 
+void UsbTransport::WakeDarkDevice(Open& o, double now) {
+  constexpr double kFirst = 3.0, kMax = 60.0;  // s without light
+  if (!o.wantVersion || o.info.kind != EndpointKind::Wireless) return;
+  auto* w = decoder_.Wireless(o.info.ep);
+  if (!w) return;
+  if (o.lightAt == 0) o.lightAt = o.imuAt = now;
+  if (w->LightPackets() != o.lightPackets) {
+    o.lightPackets = w->LightPackets();
+    o.lightAt = now;
+    o.wakes = 0;
+  }
+  if (w->ImuPackets() != o.imuPackets) {
+    o.imuPackets = w->ImuPackets();
+    o.imuAt = now;
+  }
+  if (o.versionRequestTime != 0 || w->ProtocolVersion() == 2) return;   // a request is on its way
+  const double wait = std::min(kMax, kFirst * double(1u << std::min(o.wakes, 5)));
+  const double dark = now - o.lightAt;
+  if (dark < wait || now - o.imuAt > 0.5 || now - o.lastWake < wait) return;
+  // Taking turns: its protocol requested again, then its light mode cycled (the other mode, and
+  // back to the one it announced), in case the request alone doesn't bring the light back.
+  const int mode = w->OpticalSub();
+  const bool cycle = (o.wakes & 1) && (mode == 0 || mode == 1);
+  Log(o.wakes == 0 ? LogLevel::Info : LogLevel::Debug, "%s: no light for %.0f s while its IMU keeps coming; %s\n",
+      o.info.serial.c_str(), dark, cycle ? "cycling its light mode" : "asking for its radio protocol again");
+  o.lastWake = now;
+  ++o.wakes;
+  if (!cycle) {
+    RequestVersion(o);
+    return;
+  }
+  std::lock_guard lock(hapticMutex_);
+  haptics_.push_back({o.info.serial, OpticalSubProtocolReport(1 - mode), now + 1.0, false, 1 - mode});
+  haptics_.push_back({o.info.serial, OpticalSubProtocolReport(mode), now + 1.0, false, mode});
+}
+
 void UsbTransport::SetReceiver(const Open& o, const std::string& connected) {
   std::lock_guard lock(receiversMutex_);
   receivers_[o.receiver] = Receiver{o.receiver, connected, o.info.pid};
@@ -1068,6 +1104,7 @@ void UsbTransport::Run() {
         if (w && w->ProtocolVersion() != 2) o.versionRequestTime = 0;
         else if (passStart - o.versionRequestTime > 0.5) RequestVersion(o);
       }
+      WakeDarkDevice(o, passStart);
       int count = 0;
       for (; count < 10; count++) {
         reps[count].n = hid_read(o.dev, reps[count].buf, sizeof reps[count].buf);
@@ -1158,6 +1195,9 @@ void UsbTransport::Run() {
           o.generation = decoder_.WirelessGeneration(o.info.ep);
           Log(LogLevel::Info, "%s: radio epoch changed; resetting protocol and timestamp state\n", o.info.serial.c_str());
           if (o.wantVersion) RequestVersion(o);
+          o.lightAt = o.imuAt = reps[i].t;   // a new parser: its counts start over
+          o.lightPackets = o.imuPackets = 0;
+          o.wakes = 0;
         }
       }
       if (o.disconnected) sink_->OnDeviceDetached(o.info.serial);

@@ -218,6 +218,24 @@ struct UsbTransportTestAccess {
   }
   static RawCaptureWriter& Capture(UsbTransport& t) { return t.capture_; }
   static constexpr int kOpenDeadlineMs = UsbTransport::kOpenDeadlineMs;
+  // The first endpoint as a Watchman device that negotiates its radio protocol.
+  static void WantVersion(UsbTransport& t) { t.open_.front().wantVersion = true; }
+  static void Feed(UsbTransport& t, double now, const std::vector<uint8_t>& report) {
+    t.decoder_.OnReport(now, t.open_.front().info.ep, true, report.data(), report.size());
+  }
+  static void Wake(UsbTransport& t, double now) { t.WakeDarkDevice(t.open_.front(), now); }
+  static std::vector<int> QueuedLightModes(UsbTransport& t) {
+    std::lock_guard lock(t.hapticMutex_);
+    std::vector<int> out;
+    for (const auto& c : t.haptics_) out.push_back(c.opticalMode);
+    return out;
+  }
+  // The reader's retry of a request with no transition packet yet; the transition arriving.
+  static void Transition(UsbTransport& t, double now) {
+    const uint8_t transition[30] = {0x23, 0, 3, 0, 0xe2, 1};
+    t.decoder_.OnReport(now, t.open_.front().info.ep, true, transition, sizeof transition);
+    t.open_.front().versionRequestTime = 0;
+  }
 };
 }  // namespace lh::usb
 
@@ -1056,4 +1074,89 @@ TEST_F(Doorman, AWedgedWatchmanDongleDoesNotHoldUpStopping) {
   std::this_thread::sleep_for(std::chrono::milliseconds(300));
   std::lock_guard lock(fake::m);
   EXPECT_EQ(fake::featureHanging, 0);
+}
+
+namespace {
+// Radio reports (0x23: one Wv2 packet) of a Watchman device in protocol 1.
+std::vector<uint8_t> Wv2(uint8_t msb, uint8_t lsb, uint8_t flags, std::vector<uint8_t> body) {
+  std::vector<uint8_t> r(30, 0);
+  r[0] = 0x23;
+  r[1] = msb;
+  r[2] = uint8_t(2 + body.size());
+  r[3] = lsb;
+  r[4] = flags;
+  for (size_t i = 0; i < body.size(); ++i) r[5 + i] = body[i];
+  return r;
+}
+std::vector<uint8_t> Announce2(uint8_t msb, uint8_t lsb) { return Wv2(msb, lsb, 0x40, {0x30, 1, 0}); }   // 2.0 light, controller 0
+std::vector<uint8_t> ImuOnly(uint8_t msb, uint8_t lsb) {
+  std::vector<uint8_t> body(13, 0);
+  body[0] = lsb;   // stamp byte
+  body[5] = 0x10;  // some gravity
+  return Wv2(msb, lsb, 0x80, body);
+}
+std::vector<uint8_t> ImuAndLight(uint8_t msb, uint8_t lsb) {
+  std::vector<uint8_t> body(13, 0);
+  body[0] = lsb;
+  body[5] = 0x10;
+  for (uint8_t b : {0x01, 0x0a, 0x00, 0x00, 0x18}) body.push_back(b);   // channel 0, one sensor word
+  return Wv2(msb, lsb, 0x90, body);
+}
+size_t VersionRequests(const std::string& path) {
+  std::lock_guard lock(fake::m);
+  size_t n = 0;
+  for (const auto& h : fake::handles)
+    if (h->path == path)
+      for (const auto& w : h->written) n += w.size() > 1 && w[0] == 0xff && w[1] == 0x87;
+  return n;
+}
+}  // namespace
+
+// A Watchman device that announces 2.0 light mode and sends IMU but no light (a device-info
+// request from another program as it connected): its protocol is requested again after 3 s, its
+// light mode cycled the next time, less and less often; light coming back starts that over, and
+// a device sending nothing isn't asked.
+TEST_F(Doorman, AWatchmanDeviceSendingImuButNoLightIsAskedForItsProtocolAgain) {
+  fake::plugged.push_back({"W0", L"WDONGLE", 0, 0, 0x28de, 0x2101});
+  Access::AddEndpoint(*transport, "W0", "LHR-0000D001");
+  Access::WantVersion(*transport);
+  Access::Transition(*transport, 0.0);
+  Access::Feed(*transport, 0.0, Announce2(1, 0));
+  double now = 0;
+  uint8_t lsb = 1;
+  // IMU only, 250 Hz, checked every 10 ms (a reader pass).
+  const auto run = [&](double until, bool light) {
+    for (; now < until; now += 0.01) {
+      Access::Feed(*transport, now, light ? ImuAndLight(1, lsb) : ImuOnly(1, lsb));
+      ++lsb;
+      Access::Wake(*transport, now);
+    }
+  };
+  run(2.9, false);
+  EXPECT_EQ(VersionRequests("W0"), 0u) << "asked before 3 s";
+  run(3.2, false);
+  EXPECT_EQ(VersionRequests("W0"), 1u);
+  EXPECT_GT(sink.CountContaining("LHR-0000D001: no light for 3 s while its IMU keeps coming"), 0u);
+  Access::Transition(*transport, now);
+  Access::Feed(*transport, now, Announce2(1, lsb++));
+  run(8.0, false);
+  EXPECT_TRUE(Access::QueuedLightModes(*transport).empty()) << "the second try waits longer (6 s)";
+  run(9.5, false);
+  EXPECT_EQ(VersionRequests("W0"), 1u);
+  EXPECT_EQ(Access::QueuedLightModes(*transport), (std::vector<int>{0, 1})) << "1.0 mode, then back to 2.0";
+  EXPECT_GT(sink.CountContaining("cycling its light mode"), 0u);
+  run(21.5, false);
+  EXPECT_EQ(VersionRequests("W0"), 2u) << "then a request again, 12 s later";
+  Access::Transition(*transport, now);
+  Access::Feed(*transport, now, Announce2(1, lsb++));
+  // Light again: the backoff starts over, so the next dark spell is asked about after 3 s again.
+  run(22.0, true);
+  run(24.8, false);
+  EXPECT_EQ(VersionRequests("W0"), 2u);
+  run(25.2, false);
+  EXPECT_EQ(VersionRequests("W0"), 3u);
+  // Neither IMU nor light (off, out of range): not asked.
+  const size_t before = VersionRequests("W0");
+  for (double t = now; t < now + 30; t += 0.5) Access::Wake(*transport, t);
+  EXPECT_EQ(VersionRequests("W0"), before);
 }
