@@ -151,6 +151,16 @@ frames = repeated [len][frame]
 * Light is also dropped once the oldest queued batch is older than 3 cycles (25 ms at least), so a lossy
   link can't build a backlog that delays everything behind it; IMU always goes.
 
+### Late answers (radios 0x6A000029, dongle 0x0030)
+* An Index-family radio can build its answer just before the POLL it expects instead of right after
+  the last one (air `0xF0 'A' [1 on / 0 off / 2 just ask]`, replying `[on][lead u16]`): the answer
+  carries newer data, by up to a cycle. A POLL that comes earlier than it expected gets no answer.
+  Radios boot with them on; HTC radios keep them off (they cost those 4-5 points of loss).
+* The dongle decides: on while cycles are 8 ms or longer, off below 7 ms, each held 2 s before it
+  switches, and sent again to every device that joins (one that rebooted has them on). Measured with
+  6 devices: at ~5 ms cycles they cost clean devices 1-1.5 points of loss and saved no delay; at
+  ~9 ms about even. A radio whose version the dongle doesn't know yet is asked with `0xF0 'X'`.
+
 ### Feature reads and drop counts
 * The host reads a feature with `[0xC5][tag][id]`; the radio asks the main MCU (`P id`) and
   answers `[0xC4][tag][answer]`. A late answer can't be taken for the next request. Untagged
