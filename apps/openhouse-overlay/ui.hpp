@@ -21,9 +21,10 @@ namespace openhouse::overlay {
 class Ui {
  public:
   explicit Ui(int port);
-  // k: the pixel font at 13 * k px (sharp only at whole multiples), sizes to match.
-  static void SetUpImGui(int k);
+  // k: the pixel font at 13 * k px (sharp at whole multiples), sizes to match.
+  static void SetUpImGui(float k);
   void SetLogo(uint64_t texture) { logo_ = texture; }  // an ImTextureID (GL texture)
+  void SetScaleDrawer(std::function<void()> drawer) { drawScale_ = std::move(drawer); }
   void SetInVR(bool inVR) { inVR_ = inVR; }
   void SetNameKeyboard(std::function<bool(const char*, uint64_t)> keyboard) { nameKeyboard_ = std::move(keyboard); }
   void CommitTrackerName(std::string_view name, uint64_t edit);
@@ -97,6 +98,7 @@ class Ui {
   bool toastError_ = false;
   double toastUntil_ = 0, now_ = 0;
   uint64_t logo_ = 0;
+  std::function<void()> drawScale_;
   bool inVR_ = false, quit_ = false;
 };
 

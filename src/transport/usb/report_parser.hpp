@@ -86,9 +86,20 @@ class WirelessReportParser {
   uint64_t ImuPackets() const { return imuPackets_; }
   // The light mode (optical sub-protocol) the device last announced: 0 1.0, 1 2.0, 0xff none yet.
   int OpticalSub() const { return version_ == 1 ? wv2_.opticalSub : 0xff; }
+  // The sub-protocols the device last announced (0xff: none yet). A device announces them
+  // when it starts sending, and only now and then after that, so a parser made fresh after a
+  // radio gap is seeded with the old one's: without it the probes below assumed controller
+  // sub-protocol 0, and a controller that sends its input raw (sub-protocol 1: Shiftall
+  // FlipVR) kept tracking but had its buttons read as Vive buttons, i.e. dropped, until it
+  // was switched off and on.
+  int KnownOpticalSub() const { return knownOptical_; }
+  int KnownControllerSub() const { return knownController_; }
+  void SeedSubProtocols(int opticalSub, int controllerSub);
 
  private:
   bool DecodePacket(const uint8_t* pkt, int64_t* imuTicks);
+  void NoteSubProtocols(const Wv2Decoder& d);
+  int knownOptical_ = 0xff, knownController_ = 0xff;
   uint64_t lightPackets_ = 0, imuPackets_ = 0;
   std::shared_ptr<DeviceState> dev_;
   IInputSink* sink_;

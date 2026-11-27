@@ -115,7 +115,9 @@ void ReportDecoder::AddEndpoint(const EndpointInfo& e) {
   if (e.kind != EndpointKind::Buttons && (fresh || alone || !e.configJson.empty())) sink_->OnDeviceAttached(e.serial, e.configJson);
 }
 
-void ReportDecoder::ResetWireless(Ep& ep) {
+void ReportDecoder::ResetWireless(Ep& ep, bool sameDevice) {
+  const int optical = ep.wireless ? ep.wireless->KnownOpticalSub() : 0xff;
+  const int controller = ep.wireless ? ep.wireless->KnownControllerSub() : 0xff;
   if (ep.connected) sink_->OnDeviceDetached(ep.info.serial);
   auto dev = std::make_shared<DeviceState>();
   dev->id = ep.info.serial;
@@ -124,6 +126,7 @@ void ReportDecoder::ResetWireless(Ep& ep) {
   devices_[ep.info.serial] = dev;
   ep.wireless = std::make_unique<WirelessReportParser>(dev, sink_);
   if (ep.versioning) ep.wireless->SetPendingVersionRequest();
+  if (sameDevice) ep.wireless->SeedSubProtocols(optical, controller);
   ep.connected = false;
   ep.lastWirelessReport = 0;
   ++ep.generation;
@@ -143,7 +146,7 @@ void ReportDecoder::OnReport(double hostTime, uint16_t epId, bool last, const ui
     if (data[0] != 0x23 && data[0] != 0x24) return;
     // Some receivers miss the off notification. A radio data gap is an epoch
     // boundary: discard protocol substate, IMU dedup timestamps and clock fit.
-    if (ep.lastWirelessReport && hostTime - ep.lastWirelessReport > kRadioGap) ResetWireless(ep);
+    if (ep.lastWirelessReport && hostTime - ep.lastWirelessReport > kRadioGap) ResetWireless(ep, true);
     if (!ep.connected) {
       sink_->OnDeviceAttached(ep.info.serial, ep.info.configJson);
       ep.connected = true;

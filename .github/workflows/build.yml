@@ -222,3 +222,6 @@ jobs:
         run: scripts/build-firmware.sh
       - name: Check nRF52833 dongle build
         run: make -C doorman/dongle-fw check-nrf52833
+      # The dongle's link.c built on the host: adaptive hopping on all 16 against master's rule, and homes (cmd 0x36).
+      - name: Doorman hopping host test
+        run: make -C doorman/test check

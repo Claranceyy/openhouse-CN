@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "common/crash_log.hpp"
+#include "common/ui_scale.hpp"
 #include "dongle_logo_rgba.h"
 #include "logo_rgba.h"
 #include "ui.hpp"
@@ -57,12 +58,17 @@ GLuint UploadRgba(const uint8_t* rgba, int w, int h) {
 int main() {
   lh::crash::Install("doorman-dongle-manager");
   if (!glfwInit()) { std::fprintf(stderr, "doorman-dongle-manager: no display\n"); return 1; }
-  // OPENHOUSE_DONGLE_SCALE=1|2|3: the UI size (default: 2 on screens over 1080 lines, else 1)
-  int scale = 1;
-  if (const GLFWvidmode* mode = glfwGetVideoMode(glfwGetPrimaryMonitor()); mode && mode->height > 1300) scale = 2;
-  if (const char* s = std::getenv("OPENHOUSE_DONGLE_SCALE"); s && std::atoi(s) >= 1) scale = std::atoi(s);
-  GLFWwindow* window = glfwCreateWindow(1180 * scale, 760 * scale, "Doorman Dongle Manager", nullptr, nullptr);
+  constexpr int kBaseW = 1180, kBaseH = 760;
+  const bool snapshot = std::getenv("OPENHOUSE_DONGLE_SNAPSHOT") != nullptr;
+  lh::ui::ScaleChoice scaleChoice = lh::ui::LoadScaleChoice();
+  float activeScale = lh::ui::ResolveScale(scaleChoice, kBaseW, kBaseH, "OPENHOUSE_DONGLE_SCALE", snapshot);
+  GLFWwindow* window = lh::ui::CreateFixedAspectWindow(kBaseW, kBaseH, activeScale, "Doorman Dongle Manager");
   if (!window) { std::fprintf(stderr, "doorman-dongle-manager: can't open a window\n"); glfwTerminate(); return 1; }
+  bool scaleDirty = false, scaleSave = false;
+  glfwSetWindowUserPointer(window, &scaleDirty);
+  glfwSetWindowContentScaleCallback(window, [](GLFWwindow* w, float, float) {
+    if (auto* dirty = static_cast<bool*>(glfwGetWindowUserPointer(w))) *dirty = true;
+  });
   glfwMakeContextCurrent(window);
   glfwSwapInterval(1);
   // The logo with a dongle badge (tools/make-app-icons.py).
@@ -70,13 +76,21 @@ int main() {
                  const_cast<unsigned char*>(openhouse::dongle::kDongleLogoRgba)};
   glfwSetWindowIcon(window, 1, &icon);
   ImGui::CreateContext();
-  openhouse::dongle::Ui::SetUpImGui(scale);
+  openhouse::dongle::Ui::SetUpImGui(activeScale);
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL2_Init();
   int rc = 0;
   {
     openhouse::dongle::Ui ui;
     ui.SetLogo(UploadRgba(kLogoRgba, kLogoSize, kLogoSize));
+    if (!snapshot) {
+      ui.SetScaleDrawer([&] {
+        if (lh::ui::DrawScaleCombo("##scale", scaleChoice, activeScale, kBaseW, kBaseH, window)) {
+          scaleDirty = true;
+          scaleSave = true;
+        }
+      });
+    }
     double next = glfwGetTime();
     int frame = 0;
     while (!glfwWindowShouldClose(window)) {
@@ -92,10 +106,27 @@ int main() {
       if (wait > 0) glfwWaitEventsTimeout(wait);
       else glfwPollEvents();
       next = glfwGetTime();
+      if (scaleDirty && !snapshot) {
+        scaleDirty = false;
+        const float nextScale = lh::ui::ResolveScale(scaleChoice, kBaseW, kBaseH, "OPENHOUSE_DONGLE_SCALE", false, window);
+        if (std::fabs(nextScale - activeScale) > 0.001f) {
+          activeScale = nextScale;
+          lh::ui::ApplyWindowScale(window, kBaseW, kBaseH, activeScale);
+          openhouse::dongle::Ui::SetUpImGui(activeScale);
+        }
+        if (scaleSave) {
+          lh::ui::SaveScaleChoice(scaleChoice);
+          scaleSave = false;
+        }
+      }
       ui.Poll(glfwGetTime());
       ImGui_ImplOpenGL2_NewFrame();
       ImGui_ImplGlfw_NewFrame();
       ImGui::NewFrame();
+      if (!snapshot && lh::ui::HandleScaleShortcuts(scaleChoice, activeScale, kBaseW, kBaseH, window)) {
+        scaleDirty = true;
+        scaleSave = true;
+      }
       ui.Draw(ImGui::GetIO().DisplaySize.x, ImGui::GetIO().DisplaySize.y);
       ImGui::Render();
       int w, h;

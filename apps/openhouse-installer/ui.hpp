@@ -102,8 +102,9 @@ class Watcher {
 class Ui {
  public:
   Ui();
-  static void SetUpImGui();
+  static void SetUpImGui(float k = 1.0f);
   void SetLogo(uint64_t texture) { logo_ = texture; }
+  void SetScaleDrawer(std::function<void()> drawer) { drawScale_ = std::move(drawer); }
   void Draw(float width, float height);
   // Testing (OPENHOUSE_INSTALLER_PAGE): the page shown first. "kuroshin": its DFU instructions.
   void ShowForTest(const std::string& page);
@@ -153,6 +154,7 @@ class Ui {
 
   Page page_ = Page::Home;
   uint64_t logo_ = 0;
+  std::function<void()> drawScale_;
   SteamVR steamvr_;
   DriverStatus status_;
   bool askSteamVR_ = false;

@@ -716,20 +716,38 @@ void Job::Start(std::function<bool(Job&)> work, bool devices) {
   });
 }
 
-void Ui::SetUpImGui() {
+void Ui::SetUpImGui(float k) {
   ImGuiIO& io = ImGui::GetIO();
   io.IniFilename = nullptr;
-  io.Fonts->Clear();
-  // ImGui's own pixel font: sharp only at whole multiples of its 13 px.
-  ImFontConfig font;
-  font.OversampleH = font.OversampleV = 1;
-  font.PixelSnapH = true;
-  font.SizePixels = 13.f;
-  io.Fonts->AddFontDefault(&font);
-  font.SizePixels = 26.f;
-  g_title = io.Fonts->AddFontDefault(&font);
-  font.SizePixels = 39.f;
-  g_huge = io.Fonts->AddFontDefault(&font);
+  static ImFont *bodyBmp = nullptr, *titleBmp = nullptr, *hugeBmp = nullptr;
+  static ImFont *bodyVec = nullptr, *titleVec = nullptr, *hugeVec = nullptr;
+  if (io.Fonts->Fonts.empty()) {
+    // Load both ProggyClean (sharp bitmap at integer scales) and ProggyForever (matching pixel-style
+    // vector for fractional scales) once so runtime switches never clear the live font atlas.
+    ImFontConfig bmp;
+    bmp.OversampleH = bmp.OversampleV = 1;
+    bmp.PixelSnapH = true;
+    bmp.SizePixels = 13.f;
+    bodyBmp = io.Fonts->AddFontDefaultBitmap(&bmp);
+    bmp.SizePixels = 26.f;
+    titleBmp = io.Fonts->AddFontDefaultBitmap(&bmp);
+    bmp.SizePixels = 39.f;
+    hugeBmp = io.Fonts->AddFontDefaultBitmap(&bmp);
+
+    ImFontConfig vec;
+    vec.PixelSnapH = true;
+    vec.SizePixels = 13.f;
+    bodyVec = io.Fonts->AddFontDefaultVector(&vec);
+    vec.SizePixels = 26.f;
+    titleVec = io.Fonts->AddFontDefaultVector(&vec);
+    vec.SizePixels = 39.f;
+    hugeVec = io.Fonts->AddFontDefaultVector(&vec);
+  }
+  const bool integerScale = std::fabs(k - std::round(k)) < 0.01f;
+  io.FontDefault = integerScale ? bodyBmp : bodyVec;
+  g_title = integerScale ? titleBmp : titleVec;
+  g_huge = integerScale ? hugeBmp : hugeVec;
+  ImGui::GetStyle() = ImGuiStyle();
   ImGui::StyleColorsDark();
   ImGuiStyle& style = ImGui::GetStyle();
   style.WindowRounding = 0;
@@ -737,7 +755,9 @@ void Ui::SetUpImGui() {
   style.FramePadding = ImVec2(10, 7);
   style.ItemSpacing = ImVec2(10, 9);
   style.WindowPadding = ImVec2(18, 14);
-  lh::ui::ApplyTheme();
+  style.ScaleAllSizes(k);
+  style.FontScaleMain = k;
+  lh::ui::ApplyTheme(k);
 }
 
 Ui::Ui() {
@@ -926,6 +946,11 @@ void Ui::Header() {
   ImGui::PopFont();
   ImGui::TextColored(kMuted, "Installer v%s", lh::kVersion);
   ImGui::EndGroup();
+  if (drawScale_) {
+    const float w = ImGui::GetFontSize() * 8.2f;
+    ImGui::SameLine(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x - w));
+    drawScale_();
+  }
 }
 
 // Bottom: what's installed now, and where SteamVR is.
