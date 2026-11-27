@@ -9,7 +9,7 @@
   dongle.py signal [SECS [SLOT]]     signal strength both ways + where polls get lost
   dongle.py slots | pair [SECS [SLOT [any]]] | forget SLOT|all | channels | slotstats SLOT
   dongle.py home [MASK]              hop channels of its own (0x00FF / 0xFF00 for two side by side;
-                                     0xFFFF = all 16; at least 8 channels; RAM only, a replug clears it)
+                                     0xFFFF = all 16; at least 5 channels (8 before fw 0x0030); RAM only, a replug clears it)
   dongle.py crash-test 1             deliberate HardFault (tests the crash record)
   dongle.py bank-update [DIR]        update over USB: write the bank it isn't running from
                                      DIR/doorman_dongle_<board>_a.bin / _b.bin, restart into it
@@ -223,7 +223,7 @@ def main():
     elif c == "home":
         h = open_dev(); want = int(a[1], 0) if len(a) > 1 else 0
         st, d = cmd(h, 0x36, struct.pack("<H", want))
-        if st: sys.exit("refused: a home needs at least 8 channels" if st == 2 else "this dongle firmware has no home channels (cmd 0x36)")
+        if st: sys.exit("refused: a home needs at least 5 channels (8 before firmware 0x0030)" if st == 2 else "this dongle firmware has no home channels (cmd 0x36)")
         if want:                                  # taken at the next cycle start: the reply still has the old mask
             time.sleep(0.05); st, d = cmd(h, 0x36, struct.pack("<H", 0))
         home, mask = struct.unpack_from("<2H", d)

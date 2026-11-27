@@ -235,6 +235,11 @@ class UsbTransport {
   std::set<std::string> doormanShared_;  // probe thread: USB serials several dongles share (warned once)
   DoormanCarriers doormanCarriers_;      // reader thread: which dongle carries each device
   std::vector<std::shared_ptr<DoormanDongle>> DoormanDongles() const;  // any thread
+  // Gives the open dongles their channels (DoormanHomes). Reader thread.
+  void PlanDoormanHomes(const std::vector<std::shared_ptr<DoormanDongle>>& dongles, double now);
+  int homesPlannedFor_ = -1;
+  DoormanHomePlanner homePlanner_;
+  std::set<std::string> homesOld_;   // dongles warned about firmware too old for their share
   void ScanDoorman();            // probe thread
   void PumpDoorman(double now);  // reader thread
   std::vector<Open> open_;

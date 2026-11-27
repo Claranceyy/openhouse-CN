@@ -197,7 +197,7 @@ static void test_fixed(void)
 
   /* refused / read-only */
   reset_all(1000);
-  CHECK(cmd_home(0x007F, 0, 0) == 2 && home == 0xFFFF && !home_set, "7 channels must be refused, nothing changed");
+  CHECK(cmd_home(0x000F, 0, 0) == 2 && home == 0xFFFF && !home_set, "4 channels must be refused, nothing changed");
   CHECK(cmd_home(0x0000, 0, 0) == 0 && home == 0xFFFF && !home_set, "0 only reads");
   uint16_t hh, mm;
   CHECK(cmd_home(0x00FF, &hh, &mm) == 0 && hh == 0x00FF && home_set, "0x00FF taken");
@@ -265,6 +265,9 @@ int main(void)
   test_home_random(0xFF00, 5000);
   test_home_random(0x5555, 2000);
   test_home_random(0x7FFF, 2000);
+  test_home_random(0x001F, 3000);   /* the three-dongle split: 5 + 5 + 6 */
+  test_home_random(0x03E0, 3000);
+  test_home_random(0xFC00, 3000);
   test_fixed();
   printf("hop_test: %d checks, %d failed\n", checks, fails);
   return fails != 0;

@@ -602,7 +602,9 @@ static void join_beacon(void)
    under 8 %, every bad channel is also clearly bad, so the floor is then HOME_MIN. All 16: CH_MIN_ON as before. */
 #define HOME_KEEP   4
 #define HOME_MIN    3
-#define HOME_MIN_SIZE 8                   /* the smallest home cmd 0x36 takes */
+/* The smallest home cmd 0x36 takes: 5, so three dongles split the 16 channels (5 + 5 + 6) and each still
+   has one spare over the 4 it keeps on. 8 before 0x0030. */
+#define HOME_MIN_SIZE 5
 static void home_floors(int *keep, int *least)
 {
   if (home == 0xFFFF) { *keep = *least = CH_MIN_ON; return; }
@@ -1022,7 +1024,7 @@ int link_cmd(const uint8_t *in, uint8_t *d, uint8_t *st)    /* 0x20..0x2F, 0x32.
     const uint16_t h = (uint16_t)(in[2] | in[3] << 8);
     int hn = 0;
     for (int k = 0; k < DML_NHOP; k++) hn += (h >> k) & 1;
-    if (h && hn < HOME_MIN_SIZE) { *st = 2; return 1; }     /* fewer than 8 channels: refused, nothing changed */
+    if (h && hn < HOME_MIN_SIZE) { *st = 2; return 1; }     /* fewer than 5 channels: refused, nothing changed */
     if (h && h != home) { home = h; home_set = 1; }         /* taken at the next cycle start; the same home again: nothing */
     int keep, least; home_floors(&keep, &least);
     d[0] = (uint8_t)home; d[1] = (uint8_t)(home >> 8); d[2] = (uint8_t)mask; d[3] = (uint8_t)(mask >> 8);

@@ -33,6 +33,7 @@
 
 #include "lh/input_sink.hpp"
 #include "lh/log_level.hpp"
+#include "doorman_homes.hpp"
 #include "raw_capture.hpp"
 
 struct hid_device_;
@@ -117,6 +118,19 @@ class DoormanDongle {
   // The user's name for a slot's device, kept on the dongle (firmware 0x0025+, cmd 0x34). Any
   // thread; false if the dongle isn't open.
   bool SetName(int slot, const std::string& name);
+  // The channels this dongle may hop on (cmd 0x36, bit k: hop channel k), set by the transport so
+  // dongles side by side don't share a channel: 0xFFFF all 16. Sent once its firmware is known,
+  // and again on every open (a dongle keeps it until it's unplugged). Any thread.
+  void SetHome(uint16_t mask) { wantHome_ = mask; }
+  // Its firmware takes a home of `channels` (0x002F+; fewer than 8 needs 0x0030+). False until it
+  // says its firmware. Any thread.
+  bool TakesHome(int channels) const;
+  int Firmware() const { return firmware_; }   // any thread; 0 until it says
+  // Its channel report (cmd 0x27), asked every 2 s while `on` (the transport plans homes with it).
+  // TakeChannels: the newest one not taken yet. Any thread.
+  struct ChannelReport { uint16_t mask = 0; std::array<uint8_t, kDoormanChannels> loss{}; };
+  void WatchChannels(bool on) { watchChannels_ = on; }
+  bool TakeChannels(ChannelReport* out);
   const std::string& Serial() const { return serial_; }   // any thread; also while it isn't open
   std::vector<DeviceId> Connected() const;
   // The device was reported gone: its slot shows none until the next stats refresh says otherwise.
@@ -237,7 +251,13 @@ class DoormanDongle {
   Slot slots_[kSlots];
   std::vector<uint8_t> frag_[kSlots];   // a frame split over several stream reports, per slot
   int packSeq_[kSlots]{};
-  int firmware_ = 0;                    // the dongle's firmware version (info), 0 until it says
+  std::atomic<int> firmware_{0};        // the dongle's firmware version (info), 0 until it says
+  std::atomic<uint16_t> wantHome_{0xFFFF};
+  int sentHome_ = -1;                   // what it was told since it opened (-1: nothing yet)
+  std::atomic<bool> watchChannels_{false};
+  double nextChannels_ = 0;
+  std::mutex channelsMutex_;
+  std::optional<ChannelReport> channels_;
   int slotCount_ = 8;                   // the slots this dongle has (info byte 60, firmware 0x002A+); 8 until it says                 // packed reports (0x82): the next seq expected, -1 = not in step
 
   mutable std::mutex mutex_;          // featureWaits_, downlinks_, pairMs_, opened_, slot serials

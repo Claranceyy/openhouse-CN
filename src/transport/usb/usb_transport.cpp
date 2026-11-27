@@ -722,8 +722,50 @@ void UsbTransport::PumpDoorman(double now) {
       if (!dongle.IsOpen()) dongle.Open(f, now);
     }
   }
+  PlanDoormanHomes(dongles, now);
   // No lock held: a device detaching here calls back into OnDeviceGone through the sink.
   for (const auto& dongle : dongles) dongle->Pump(now);
+}
+
+void UsbTransport::PlanDoormanHomes(const std::vector<std::shared_ptr<DoormanDongle>>& dongles, double now) {
+  // Only dongles carrying a device share the channels out: one without sends nothing but join
+  // beacons (on the join channel, outside every home), so it keeps all 16 until a device joins it.
+  std::vector<DoormanDongle*> open;   // in serial order (doorman_ is kept sorted): the same split every time
+  std::vector<std::string> serials;
+  for (const auto& d : dongles) {
+    if (!d->IsOpen()) continue;
+    if (d->Connected().empty()) {
+      d->SetHome(0xFFFF);
+      d->WatchChannels(false);
+      continue;
+    }
+    open.push_back(d.get());
+    serials.push_back(d->Serial());
+  }
+  for (DoormanDongle* d : open) {
+    d->WatchChannels(open.size() >= 2);
+    DoormanDongle::ChannelReport report;
+    if (d->TakeChannels(&report)) homePlanner_.Observe(d->Serial(), report.mask, report.loss, now);
+  }
+  const std::vector<uint16_t> homes = homePlanner_.Homes(serials, now);
+  if (!homePlanner_.Change().empty()) Log(LogLevel::Info, "Doorman channels: %s\n", homePlanner_.Change().c_str());
+  for (size_t i = 0; i < open.size(); ++i) open[i]->SetHome(homes[i]);
+  if (int(open.size()) != homesPlannedFor_) {
+    homesPlannedFor_ = int(open.size());
+    if (open.size() > size_t(kDoormanHomesMax))
+      Log(LogLevel::Warn, "%d Doorman Dongles: more than %d share radio channels, expect more lost packets\n",
+          int(open.size()), kDoormanHomesMax);
+    else if (open.size() > 1)
+      Log(LogLevel::Info, "%d Doorman Dongles: radio channels split between them\n", int(open.size()));
+  }
+  for (size_t i = 0; i < open.size(); ++i) {
+    int channels = 0;
+    for (int k = 0; k < 16; ++k) channels += (homes[i] >> k) & 1;
+    const int fw = open[i]->Firmware();
+    if (fw && !open[i]->TakesHome(channels) && homesOld_.insert(open[i]->Serial()).second)
+      Log(LogLevel::Warn, "Doorman Dongle %s: its firmware can't take its share of the channels; update it in the openhouse installer\n",
+          open[i]->Serial().c_str());
+  }
 }
 
 bool UsbTransport::SetReceiverName(const std::string& receiver, const std::string& name) {
