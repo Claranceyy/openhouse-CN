@@ -252,3 +252,77 @@ TEST(ClockSync, MinimumWindowFollowsTheFastestBurst) {
   EXPECT_NEAR(window.Offset(), 100.001, 0.0003);
   EXPECT_GT(gains.Offset(), 100.002);
 }
+
+namespace {
+// A Watchman report carrying one Wv2 packet: [0x23][time msb][n][lsb][flags][body...].
+std::vector<uint8_t> Wv2Report(uint8_t msb, uint8_t flags, std::vector<uint8_t> body) {
+  std::vector<uint8_t> r(30, 0);
+  r[0] = 0x23;
+  r[1] = msb;
+  r[2] = uint8_t(2 + body.size());
+  r[3] = 0;
+  r[4] = flags;
+  for (size_t i = 0; i < body.size(); ++i) r[5 + i] = body[i];
+  return r;
+}
+// Meta section only: optical and controller sub-protocols announced.
+std::vector<uint8_t> Announce(uint8_t msb, int optical, int controller) {
+  return Wv2Report(msb, 0x40, {0x30, uint8_t(optical), uint8_t(controller)});
+}
+// Input section only: FlipVR's raw 6-byte record.
+std::vector<uint8_t> RawInput(uint8_t msb, uint8_t first) { return Wv2Report(msb, 0x20, {first, 2, 3, 4, 5, 6}); }
+}  // namespace
+
+// A controller that sends its input raw (sub-protocol 1, Shiftall FlipVR) announces that once.
+// After a radio gap the endpoint's parser is made fresh; it must still read the input as raw,
+// not wait forever for an announcement or assume sub-protocol 0 (buttons dead, tracking fine).
+TEST(WirelessReconnect, KeepsTheAnnouncedSubProtocolsOverARadioGap) {
+  InputRecorder rec;
+  lh::usb::ReportDecoder decoder(&rec);
+  lh::usb::EndpointInfo endpoint;
+  endpoint.ep = 1; endpoint.kind = lh::usb::EndpointKind::Wireless;
+  endpoint.serial = "LHR-FLIP"; endpoint.gyroRange = endpoint.accelRange = 0;
+  decoder.AddEndpoint(endpoint);
+  decoder.SetVersionNegotiation(1);
+  decoder.Wireless(1)->SetPendingVersionRequest();
+  auto send = [&](double t, const std::vector<uint8_t>& r) { decoder.OnReport(t, 1, true, r.data(), r.size()); };
+  uint8_t transition[30] = {0x23, 0, 3, 0, 0xe2, 1};
+  decoder.OnReport(1.0, 1, true, transition, sizeof transition);
+  ASSERT_EQ(decoder.Wireless(1)->ProtocolVersion(), 1);
+  send(1.01, Announce(1, 0, 1));
+  EXPECT_EQ(decoder.Wireless(1)->KnownControllerSub(), 1);
+  send(1.02, RawInput(1, 0x11));
+  ASSERT_EQ(rec.inputs.size(), 1u);
+  EXPECT_EQ(rec.inputs[0].format, lh::InputFormat::Raw);
+  // Two seconds of silence, then the version handshake again and input with no announcement.
+  send(3.5, RawInput(2, 0x22));
+  EXPECT_EQ(decoder.WirelessGeneration(1), 1u);
+  decoder.OnReport(3.51, 1, true, transition, sizeof transition);
+  send(3.52, RawInput(2, 0x33));
+  ASSERT_FALSE(rec.inputs.empty());
+  EXPECT_EQ(rec.inputs.back().format, lh::InputFormat::Raw);
+  ASSERT_EQ(rec.inputs.back().raw.size(), 6u);
+  EXPECT_EQ(rec.inputs.back().raw[0], 0x33);
+  // The device's own announcement still wins.
+  send(3.53, Announce(2, 0, 0));
+  EXPECT_EQ(decoder.Wireless(1)->KnownControllerSub(), 0);
+}
+
+// An off notification (0x26) may be followed by another device: nothing is carried over.
+TEST(WirelessReconnect, ForgetsTheSubProtocolsWhenTheDeviceTurnsOff) {
+  InputRecorder rec;
+  lh::usb::ReportDecoder decoder(&rec);
+  lh::usb::EndpointInfo endpoint;
+  endpoint.ep = 1; endpoint.kind = lh::usb::EndpointKind::Wireless;
+  endpoint.serial = "LHR-FLIP"; endpoint.gyroRange = endpoint.accelRange = 0;
+  decoder.AddEndpoint(endpoint);
+  decoder.SetVersionNegotiation(1);
+  decoder.Wireless(1)->SetPendingVersionRequest();
+  uint8_t transition[30] = {0x23, 0, 3, 0, 0xe2, 1};
+  decoder.OnReport(1.0, 1, true, transition, sizeof transition);
+  const auto a = Announce(1, 0, 1);
+  decoder.OnReport(1.01, 1, true, a.data(), a.size());
+  const uint8_t off[] = {0x26};
+  decoder.OnReport(1.2, 1, true, off, sizeof off);
+  EXPECT_EQ(decoder.Wireless(1)->KnownControllerSub(), 0xff);
+}
