@@ -23,6 +23,7 @@
   desktopItems = [
     (makeDesktopItem {
       name = "openhouse";
+      startupWMClass = "openhouse";   # the window's app id (Wayland finds the icon by it)
       desktopName = "openhouse";
       comment = "Devices, base stations, room and settings";
       exec = "openhouse";
@@ -33,6 +34,7 @@
     })
     (makeDesktopItem {
       name = "doorman-dongle-manager";
+      startupWMClass = "doorman-dongle-manager";   # the window's app id (Wayland finds the icon by it)
       desktopName = "Doorman Dongle Manager";
       comment = "Doorman Dongle pairing, channels and firmware";
       exec = "doorman-dongle-manager";
@@ -41,6 +43,7 @@
     })
     (makeDesktopItem {
       name = "openhouse-installer";
+      startupWMClass = "openhouse-installer";   # the window's app id (Wayland finds the icon by it)
       desktopName = "openhouse installer (v${version})";
       comment = "Installs, repairs or removes openhouse, and flashes its firmware";
       exec = "openhouse-installer";

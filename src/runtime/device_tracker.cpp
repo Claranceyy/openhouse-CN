@@ -526,7 +526,12 @@ void DeviceTracker::SyncRoom() {
     // Exactly the accelerometer's (or SteamVR's) variance: no device has levelled it yet. A room
     // loosened later (a base power-cycled, relearned) isn't a first level.
     const bool firstLevel = origin && std::abs(origin->rotationVariance - RoomMap::kImportedLevelVariance) < 1e-9;
-    if (!firstLevel) room_->RefineOriginTilt(primary, {f.x[16], f.x[17]}, f.P(16, 16), filter_->Time());
+    // Only while the device turns slowly: in spins and swings its tilt estimate is held or off by many degrees,
+    // and averaged into the room's level even at small weight it changed tracking in fast-motion replays.
+    // (The room still turns toward its level every call: it glides.)
+    constexpr double kCalmTurn = 0.5;   // rad/s, ~30 deg/s
+    const bool calm = std::sqrt(f.x[13] * f.x[13] + f.x[14] * f.x[14] + f.x[15] * f.x[15]) < kCalmTurn;
+    if (!firstLevel) room_->RefineOriginTilt(primary, {f.x[16], f.x[17]}, calm ? f.P(16, 16) : 1.0, filter_->Time());
     else if (Now() - calibratedAt_ >= kLevelAfter)
       room_->RefineOriginTilt(primary, {f.x[16], f.x[17]}, std::max(f.P(16, 16), kTiltFloor), filter_->Time());
   }

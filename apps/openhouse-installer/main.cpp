@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "common/crash_log.hpp"
+#include "common/desktop_identity.hpp"
 #include "common/ui_scale.hpp"
 #include "logo_rgba.h"
 #include "ui.hpp"
@@ -51,6 +52,7 @@ int Run(const std::string& mode) {
   const char* snapshot = std::getenv("OPENHOUSE_INSTALLER_SNAPSHOT");
   lh::ui::ScaleChoice scaleChoice = lh::ui::LoadScaleChoice();
   float activeScale = lh::ui::ResolveScale(scaleChoice, kBaseW, kBaseH, nullptr, snapshot != nullptr);
+  lh::ui::DesktopIdentity("openhouse-installer", "openhouse.png", "openhouse installer");   // Wayland: the icon comes from the menu entry of that name
   GLFWwindow* window = lh::ui::CreateFixedAspectWindow(kBaseW, kBaseH, activeScale, "openhouse installer");
   if (!window) { glfwTerminate(); return 1; }
   bool scaleDirty = false, scaleSave = false;

@@ -40,6 +40,7 @@ struct RoomBase {
   bool solved = false;            // pose owned by the room solver (no filter blending)
   bool relearn = false;           // bumped this session: the next confident solve is taken whole
   uint32_t epoch = 0;             // bumps each time the base is re-placed (moved, knocked): devices resync
+  int levelSamples = 0;           // origin: device tilt estimates averaged into the room's level (RefineOriginTilt)
 };
 
 struct Room {
@@ -127,6 +128,7 @@ class RoomMap {
   bool LevelSettled() const;
   // An origin's level from a base accelerometer or from SteamVR's database: devices will refine it.
   static constexpr double kImportedLevelVariance = 1.5e-4;
+  static constexpr int kSettledSamples = 30;   // device tilt estimates (one per 2 s) before the level counts as settled
   // The other bases of a room imported from SteamVR: a starting guess (3 cm, 1 deg), refined by the light.
   static constexpr double kImportedPositionVariance = 3 * 0.03 * 0.03;
   static constexpr double kImportedRotationVariance = 3 * 0.0175 * 0.0175;
@@ -171,6 +173,8 @@ class RoomMap {
   bool frozen_ = false;
   std::optional<Eigen::Matrix3d> levelTarget_;  // where RefineOriginTilt is turning the room
   double levelTargetAt_ = std::numeric_limits<double>::quiet_NaN();  // when it was last set
+  double levelSampleAt_ = std::numeric_limits<double>::quiet_NaN();  // when an estimate was last averaged in
+  std::optional<Eigen::Vector3d> levelUp_;  // the averaged up, in the origin's base frame
   double levelTime_ = std::numeric_limits<double>::quiet_NaN(), advanceTime_ = std::numeric_limits<double>::quiet_NaN();
   std::map<uint32_t, Eigen::Isometry3d> solvedTarget_;
   bool levelled_ = false;  // the session's first level is applied at once

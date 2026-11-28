@@ -181,6 +181,17 @@ fs::path EnvisionConfig() {
 // Envision runs only the plugins ticked in its Preferences: their .desktop paths (canonical, as it
 // compares them) in its config's xr_plugins. Envision writes its whole config back from memory, so
 // it's only edited while Envision isn't running. False when it is, or there's no config to edit.
+// Whether Envision has that entry ticked as a plugin.
+bool EnvisionPluginTicked(const fs::path& desktop) {
+  std::error_code ec;
+  std::ifstream in(EnvisionConfig());
+  const auto j = nlohmann::json::parse(in, nullptr, false);
+  if (!j.is_object() || !j.contains("xr_plugins") || !j["xr_plugins"].is_array()) return false;
+  const std::string path = Utf8(fs::weakly_canonical(desktop, ec));
+  for (const auto& e : j["xr_plugins"]) if (e.is_string() && e.get<std::string>() == path) return true;
+  return false;
+}
+
 bool EnableEnvisionPlugin(const fs::path& desktop, bool on) {
   const fs::path config = EnvisionConfig();
   std::error_code ec;
@@ -593,18 +604,26 @@ void InstallDriver(const fs::path& steamvr, const InstallOptions& options, const
   // Before 1.0.5 the update check was the "openhouse" entry's own Envision plugin (--check). That
   // entry now opens the openhouse window: if Envision had it ticked for the check, it's unticked,
   // so the window doesn't start opening with every session (the check has its own entry now).
+  // The entry was also renamed then (openhouse-openhouse.desktop -> openhouse.desktop, the window's app id,
+  // so Wayland shows its icon): one Envision had ticked as the window's plugin is ticked again under its
+  // new name once written.
+  bool envisionHadWindow = false;
   {
-    std::ifstream old(ShortcutFile("openhouse"));
+    std::ifstream old(OldShortcutFile("openhouse"));
     const std::string text((std::istreambuf_iterator<char>(old)), std::istreambuf_iterator<char>());
     const auto plugin = text.find("X-XR-Plugin-Exec=");
     if (plugin != std::string::npos && text.find("--check", plugin) < text.find('\n', plugin))
-      EnableEnvisionPlugin(ShortcutFile("openhouse"), false);
+      EnableEnvisionPlugin(OldShortcutFile("openhouse"), false);
+    else envisionHadWindow = EnvisionPluginTicked(OldShortcutFile("openhouse"));
   }
 #endif
   // SteamVR's firmware Update button on a device opens openhouse://update-dongles: the saved installer.
   if (!InstallUrlHandler(saved / (std::string("openhouse-installer") + kExe))) log("SteamVR's Update button won't open the updater");
   if (const std::string failed = InstallShortcuts(shortcuts); !failed.empty()) log("Menu entries not added: " + failed);
   else if (!shortcuts.empty()) log("Added the apps to the menu");
+#ifndef _WIN32
+  if (envisionHadWindow && EnableEnvisionPlugin(OldShortcutFile("openhouse"), false)) EnableEnvisionPlugin(ShortcutFile("openhouse"), true);
+#endif
 #ifndef _WIN32
   if (options.monadoCheck == MonadoCheck::Systemd) {
     InstallMonadoCheck(p);

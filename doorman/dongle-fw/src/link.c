@@ -91,6 +91,9 @@ typedef struct {
      on in order) and announced in the POLL (DML_F_SACK), so the radio resends only the lost one. Go-back alone cost
      two cycles and a wasted answer per loss. */
   uint8_t held, held_seq, held_n, held_buf[DML_MAXLEN];
+  uint8_t late_state;                   /* its radio's late answers as it last said (0xFF: not known yet) */
+  uint8_t ver_asked;                    /* its radio was asked for its version (air 'X') since it joined */
+  uint32_t late_ask_ms;                 /* when late answers were last sent to it (0: nothing waiting) */
   uint32_t held_used, held_set;
   uint8_t bq[DMB_MAX_W][DMB_MAXF];          /* a batch's frames, held until its CRC-8 passes */
   uint32_t resyncs;                     /* codec out of step: made to rejoin */
@@ -228,6 +231,7 @@ static void deliver(slot_t *s, const uint8_t *f, int gl)
     const int k = (int)(s - sl);                            /* until it says (or the installer sets it, 0x39) */
     if (k >= 0 && k < DML_SLOTS && pairs.radio[k]) { pairs.radio[k] = 0; pairs_dirty = 1; }
   }
+  if (f[0] == 0xF0 && f[1] == 'A' && gl >= 3) { s->late_state = f[2] ? 1 : 0; s->late_ask_ms = 0; }   /* late answers: its state */
   if (f[0] == 'D' && gl >= 5) { s->dev_drops = (uint16_t)(f[1] | f[2] << 8); s->dev_reply_drops = (uint16_t)(f[3] | f[4] << 8); }
   else {
     s->frames_up++; s->bytes_up += (uint32_t)gl;
@@ -503,6 +507,49 @@ static void load_tick(void)
 }
 
 /* ---------------- joining ---------------- */
+/* Late answers (Index-family radios 0x6A000029+, air 'A'): the radio builds its answer just before the POLL it
+   expects instead of right after the last one, so the answer carries newer data, by up to a cycle. A POLL that
+   comes earlier than it expected gets no answer (a lost exchange). Measured with 6 devices: at ~5 ms cycles they
+   cost clean devices 1-1.5 points of loss and saved no delay; at ~9 ms about even, the worst delays a little
+   better. So the dongle turns them on only while cycles are long, and off otherwise (radios boot with them on).
+   HTC radios keep theirs off (it cost them 4-5 points). */
+#define LATE_ON_US     8000u           /* on from this cycle length */
+#define LATE_OFF_US    7000u           /* off below this one */
+#define LATE_HOLD_MS   2000u           /* past a threshold this long before switching */
+#define LATE_RETRY_MS  500u            /* no reply from the radio: sent again */
+static uint32_t plan;                        /* (the cycle's planned slots, below) */
+static uint8_t late_want;                    /* late answers on (1) or off (0) for every Index-family radio */
+static uint32_t late_cross_ms;               /* when the cycle went past the threshold to switch (0: it hasn't) */
+static int down_push(slot_t *s, const uint8_t *f, uint8_t n)   /* a downlink frame of the dongle's own */
+{
+  if (s->down_len + 1u + n > sizeof s->down_buf) return 0;
+  s->down_buf[s->down_len++] = n; memcpy(s->down_buf + s->down_len, f, n); s->down_len += n;
+  return 1;
+}
+/* Once a cycle: decides from the cycle's length (forbid: off regardless) and tells the planned slots' radios. */
+static void late_tick(uint32_t period, int forbid)
+{
+  const int want = forbid ? 0 : late_want ? period >= LATE_OFF_US : period >= LATE_ON_US;
+  if (want == late_want) late_cross_ms = 0;
+  else if (forbid) { late_want = 0; late_cross_ms = 0; }
+  else if (!late_cross_ms) late_cross_ms = ms_ticks | 1u;
+  else if (ms_ticks - late_cross_ms >= LATE_HOLD_MS) { late_want = (uint8_t)want; late_cross_ms = 0; }
+  for (uint8_t k = 0; k < DML_SLOTS; k++) {
+    slot_t *s = &sl[k];
+    if (!((plan >> k) & 1) || !s->active || slot_skipping(s)) continue;
+    const uint32_t v = pairs.radio[k];
+    if (!v) {                                               /* not known (no driver asked): ask it once */
+      static const uint8_t ask[2] = { DML_AIR_UPD, 'X' };
+      if (!s->ver_asked && down_push(s, ask, 2)) s->ver_asked = 1;
+      continue;
+    }
+    if (v >> 24 != 0x6Au || v < 0x6A000029u || s->late_state == late_want) continue;
+    if (s->late_ask_ms && ms_ticks - s->late_ask_ms < LATE_RETRY_MS) continue;
+    const uint8_t a[3] = { DML_AIR_UPD, 'A', late_want };
+    if (down_push(s, a, 3)) s->late_ask_ms = ms_ticks | 1u;
+  }
+}
+
 static void slot_reset(uint8_t i)
 {
   slot_t *s = &sl[i];
@@ -516,6 +563,7 @@ static void slot_reset(uint8_t i)
   s->up_head = s->up_tail; s->frag_left = 0; s->pk_rest = 0;
   s->pend_n = s->pend_k = 0;                               /* the old device's answer isn't for the new codec */
   s->held = 0;
+  s->late_state = 0xFF; s->ver_asked = 0; s->late_ask_ms = 0;   /* told again: a radio that rebooted has them on */
   s->g_have = 0; s->g_miss = 0; s->g_per[1] = 0;           /* joined afresh from a beacon: no old hop state */
   s->active = 1; s->last_resp_ms = ms_ticks;               /* poll it right away */
 }
@@ -772,6 +820,7 @@ void link_poll(void)
   period_us = n * slot_us + (join || test_join_always ? 700u : JOIN_TAIL_US);
   t_c += cycle_len;                                         /* the previous cycle's own length */
   cycle_len = period_us;
+  late_tick(period_us, 0);
   if ((int32_t)(us_now() - t_c) > (int32_t)period_us || (int32_t)(t_c - us_now()) > (int32_t)period_us)
     t_c = us_now();                                         /* fell behind / first run: restart the plan */
   wait_until(t_c);

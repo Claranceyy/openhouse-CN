@@ -25,6 +25,7 @@
 #include <optional>
 #include <thread>
 #include "common/crash_log.hpp"
+#include "common/desktop_identity.hpp"
 #include "common/ui_scale.hpp"
 #include "driver_check.hpp"
 #include <cstdlib>
@@ -98,6 +99,7 @@ int RunDesktop() {
   const bool snapshot = std::getenv("OPENHOUSE_OVERLAY_SNAPSHOT") != nullptr;
   lh::ui::ScaleChoice scaleChoice = lh::ui::LoadScaleChoice();
   float activeScale = lh::ui::ResolveScale(scaleChoice, kBaseW, kBaseH, "OPENHOUSE_OVERLAY_SCALE", snapshot);
+  lh::ui::DesktopIdentity("openhouse", "openhouse.png", "openhouse");   // Wayland: the icon comes from the menu entry of that name
   GLFWwindow* window = lh::ui::CreateFixedAspectWindow(kBaseW, kBaseH, activeScale, "openhouse");
   if (!window) { std::fprintf(stderr, "openhouse-overlay: can't open a window\n"); return 1; }
   bool scaleDirty = false, scaleSave = false;

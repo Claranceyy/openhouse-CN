@@ -51,7 +51,12 @@ fs::path Folder() {
   const char* xdg = std::getenv("XDG_DATA_HOME");
   return (xdg && *xdg ? Path(xdg) : HomeDirectory() / ".local" / "share") / "applications";
 }
-fs::path File(const fs::path& folder, const std::string& id) { return folder / ("openhouse-" + id + ".desktop"); }
+// Named as each window's app id (lh::ui::DesktopIdentity) and the Nix package's entries, so Wayland finds
+// the icon: "openhouse", "doorman-dongle-manager", "openhouse-installer".
+std::string AppId(const std::string& id) { return id == "openhouse" || id == "doorman-dongle-manager" ? id : "openhouse-" + id; }
+fs::path File(const fs::path& folder, const std::string& id) { return folder / (AppId(id) + ".desktop"); }
+// Before 1.0.5 every entry was openhouse-<id>.desktop: removed with the others.
+fs::path OldFile(const fs::path& folder, const std::string& id) { return folder / ("openhouse-" + id + ".desktop"); }
 
 // An Exec argument: quoted, with the characters the spec reserves inside quotes escaped (and the
 // backslash doubled again for the key's own escapes).
@@ -68,7 +73,8 @@ std::string Arg(const std::string& a) {
 bool Write(const fs::path& folder, const Shortcut& s) {
   std::string d = "[Desktop Entry]\nType=Application\nName=" + s.name + "\nComment=" + s.comment +
                   "\nExec=" + Arg(Utf8(s.exe)) + "\nPath=" + Utf8(s.exe.parent_path()) +
-                  "\nIcon=" + (s.icon.empty() ? std::string("input-gaming") : Utf8(s.icon)) + "\nTerminal=false\nCategories=Utility;\n";
+                  "\nIcon=" + (s.icon.empty() ? std::string("input-gaming") : Utf8(s.icon)) + "\nStartupWMClass=" + AppId(s.id) +
+                  "\nTerminal=false\nCategories=Utility;\n";
   if (s.hidden) d += "NoDisplay=true\n";
   if (s.xrPlugin || !s.xrPluginArgs.empty()) {
     d += "X-XR-Plugin=true\nX-XR-Plugin-Exec=" + Arg(Utf8(s.exe));
@@ -88,7 +94,7 @@ void RemoveAll(const fs::path& folder) {
   std::error_code ec;
   fs::remove_all(folder, ec);  // only ours are in it
 #else
-  for (const char* id : kIds) RemoveFile(File(folder, id));
+  for (const char* id : kIds) { RemoveFile(File(folder, id)); RemoveFile(OldFile(folder, id)); }
 #endif
 }
 
@@ -118,6 +124,15 @@ fs::path ShortcutFile(const std::string& id) {
   return {};
 #else
   return File(Folder(), id);
+#endif
+}
+
+fs::path OldShortcutFile(const std::string& id) {
+#ifdef _WIN32
+  (void)id;
+  return {};
+#else
+  return OldFile(Folder(), id);
 #endif
 }
 
