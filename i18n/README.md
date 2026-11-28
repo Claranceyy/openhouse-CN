@@ -15,17 +15,19 @@
 - `patterns`：动态拼接文本模板，使用 `{1}`、`{2}` 捕获片段，使用 `{@1}` 对捕获片段进行递归翻译。
 
 ## 同步原作者更新与补翻流程
-1. 同步上游更新：
+> 约定：`master` 为本项目默认显示的简体中文汉化主分支，`upstream` 分支用于干净同步原作者 `YusufOzmen01/openhouse` 的上游更新（在 GitHub 网页端使用 **Sync fork** 时，请先切换到 `upstream` 分支再同步，切勿在 `master` 分支直接丢弃提交）。
+
+1. 同步上游更新并合入汉化主分支：
    ```bash
-   git switch master
+   git switch upstream
    git pull upstream master
-   git push origin master
-   git switch CN
-   git merge master
+   git push origin upstream
+   git switch master
+   git merge upstream
    ```
 2. 校验词典并扫描是否有新增未翻译文本：
    ```bash
    python i18n/extract_strings.py
    ```
 3. 运行期自动抓漏翻（可选）：启动软件前设置环境变量 `OPENHOUSE_I18N_DUMP=1`，退出后会在 `%APPDATA%\lh\i18n_missing.json`（Linux 为 `~/.config/lh/i18n_missing.json`）生成本次界面中未命中的英文词条。
-4. 补完 `i18n/zh_CN.json` 后提交并推送到 `CN` 分支，GitHub Actions 会自动编译打包 Windows 与 Linux 成品压缩包。
+4. 补完 `i18n/zh_CN.json` 后提交并推送到 `master` 分支，GitHub Actions 会自动编译打包 Windows 与 Linux 成品压缩包。
